@@ -29,6 +29,30 @@ main{flex:1;padding:0 14px 96px}
 .top .pill{background:#DCCAA9;color:var(--ink)}
 .pbgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.pb{background:var(--gl);border-radius:12px;padding:10px 12px}.pb span{display:block;font-size:12px;color:var(--mut);font-weight:600}.pb b{display:block;font-size:30px;line-height:1.1}.pb small{color:var(--mut);font-size:12px}
 img.av{display:block;flex-shrink:0}
+.chk{display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:14px;line-height:1.4;cursor:pointer}
+.chk input{width:22px;height:22px;min-height:0;flex-shrink:0;margin:1px 0 0;accent-color:var(--o)}
+.doc{font-size:14.5px;line-height:1.55}
+.doc h2{font-family:'Barlow Condensed',Inter,sans-serif;font-size:24px;margin:20px 0 6px}
+.doc h2:first-child,.doc p.sm+h2{margin-top:4px}
+.doc h3{font-size:15px;margin:16px 0 4px}
+.doc p{margin:6px 0}
+.doc ul,.doc ol{padding-left:20px;margin:6px 0}
+.doc li{margin:5px 0}
+.doc a{color:var(--o)}
+.doc .formula{background:#171512;color:#EADCC2;border-radius:10px;padding:12px 10px;font-family:'Barlow Condensed',Inter,sans-serif;font-size:18px;text-align:center;margin:10px 0;letter-spacing:.3px}
+.doc .ex{background:#F5EEE2;border-left:4px solid var(--o);border-radius:0 10px 10px 0;padding:10px 12px;margin:10px 0;font-size:14px}
+.ptab{width:100%;border-collapse:collapse;margin:8px 0 4px}
+.ptab td{padding:8px 4px;border-bottom:1px solid #EDE4D5}
+.ptab td:last-child{text-align:right;font-family:'Barlow Condensed',Inter,sans-serif;font-size:18px;color:var(--o)}
+.bibs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}
+.bib{position:relative;display:flex;flex-direction:column;background:#FFFDF9;border:1px solid #DCCFB8;border-radius:10px;overflow:hidden;text-decoration:none;color:var(--ink);box-shadow:0 2px 0 rgba(23,21,18,.06);min-height:150px}
+.bib .hole{position:absolute;width:7px;height:7px;border-radius:50%;background:var(--bg);border:1px solid #CDBB98;z-index:1}
+.bib-top{background:var(--bc);color:#FFF6EA;padding:9px 18px 7px;display:flex;flex-direction:column;gap:1px;text-align:center}
+.bib-top b{font-family:'Barlow Condensed',Inter,sans-serif;font-size:15px;line-height:1.1;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;text-transform:uppercase;letter-spacing:.3px}
+.bib-top small{font-size:10px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bib-num{flex:1;display:flex;align-items:center;justify-content:center;font-family:'Barlow Condensed',Inter,sans-serif;font-weight:700;line-height:1;padding:6px 8px;text-align:center;word-break:break-word;letter-spacing:.5px}
+.bib-foot{display:flex;justify-content:space-between;align-items:center;gap:4px;border-top:1px dashed #DCCFB8;padding:6px 16px 9px;font-size:11px;color:var(--mut);white-space:nowrap}
+.bib-foot b{color:var(--o);font-family:'Barlow Condensed',Inter,sans-serif;font-size:15px}
 textarea{width:100%;min-height:84px;border:1px solid #DCCFB8;border-radius:12px;padding:10px 12px;font:inherit;font-size:16px;background:var(--card);color:var(--ink);resize:vertical}
 .bio{margin-top:10px;font-size:14px;line-height:1.45;white-space:pre-line;color:var(--ink)}.bio a{color:var(--o);font-weight:600}
 .brand{font-family:'Barlow Condensed',Inter,sans-serif;font-weight:700;letter-spacing:.08em;font-size:13px;opacity:.9}
@@ -60,7 +84,7 @@ input:focus,button:focus-visible,a:focus-visible{outline:2px solid var(--g);outl
 button.item,a.item{cursor:pointer}
 .item.me{background:var(--gl)}
 .item.out{background:#F4EEE3;opacity:.75}
-.pos{width:28px;font-family:'Barlow Condensed',Inter,sans-serif;font-weight:700;font-size:19px;color:var(--o);flex-shrink:0}
+.pos{min-width:28px;padding-right:2px;font-family:'Barlow Condensed',Inter,sans-serif;font-weight:700;font-size:19px;color:var(--o);flex-shrink:0}
 .grow{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .grow b{font-size:15px;font-weight:600}
 .grow small,.sm{font-size:12px;color:var(--mut)}

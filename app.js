@@ -30,7 +30,7 @@ var COLORS = [['#14532D', 'Verde'], ['#1D4ED8', 'Blu'], ['#B91C1C', 'Rosso'], ['
 function toast(t) { var el = $('toast'); el.textContent = t; el.classList.add('on'); clearTimeout(toast._t); toast._t = setTimeout(function () { el.classList.remove('on'); }, 2800); }
 
 // =================== regole ===================
-var HALF = 21.0975, CLOSE_DAYS = 7;
+var HALF = 21.0975, CLOSE_DAYS = 5;
 function category(sex, birth, year) {
   if (!sex || !birth) return '—';
   var age = year - birth; if (age < 18) return '—';
@@ -40,8 +40,12 @@ function category(sex, birth, year) {
 function catLabel(c) { return /60$/.test(c) ? c + '+' : c; }
 function band(km) { if (km <= 5) return 1; if (km <= 10) return 2; if (km <= HALF + 0.05) return 3; if (km <= 30) return 4; return 5; }
 var BANDS = { 1: 'fino a 5 km', 2: 'oltre 5 fino a 10 km', 3: 'oltre 10 km fino alla mezza', 4: 'oltre la mezza fino a 30 km', 5: 'oltre 30 km' };
-function distBonus(km) { if (km >= 42) return 15; if (km > 30) return 10; if (km >= 21) return 5; return 0; }
-function placePts(max, n, pos, soglia) { if (!(n >= 1) || !(pos >= 1)) return 0; var frac = n === 1 ? 1 : (n - pos) / (n - 1); return Math.round(max * frac * Math.min(1, n / soglia)); }
+// regole punti: partecipazione 10, generale fino a 100, categoria fino a 50, progresso 10, bonus +10/+15/+20
+var PTS = { part: 10, gen: 100, cat: 50, imp: 10 };
+function distBonus(km) { if (km >= 42) return 20; if (km > 30) return 15; if (km >= 21) return 10; return 0; }
+// conta chi hai battuto più te stesso: il primo prende il massimo, l'ultimo una quota; con pochi arrivati si riduce. Nessun arrotondamento qui.
+function placePts(max, n, pos, soglia) { if (!(n >= 1) || !(pos >= 1)) return 0; var frac = Math.max(0, (n - pos + 1) / n); return max * frac * Math.min(1, n / soglia); }
+function fmtD(v) { return (Math.round((v || 0) * 10) / 10).toLocaleString('it-IT'); }
 function median(a) { var s = a.slice().sort(function (x, y) { return x - y; }); var m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
 function isClosed(dateStr) { return daysSince(dateStr) > CLOSE_DAYS; }
 
@@ -74,8 +78,8 @@ function recompute() {
   all.forEach(function (e) {
     if (e.official && e.resultId) { // classifica ufficiale: punti sul risultato ufficiale
       var race = S.races[e.raceId], o = e.official, r = { official: true, pos: o.pos, n: o.n || o.pos, cat: o.cat || '—', catPos: o.catPos || 0, catN: o.catN || 0, part: 0, bonus: 0, gen: 0, catPts: 0, imp: 0, impWhy: '', total: 0, closed: isClosed(race.date) };
-      if (e.km >= 3) { r.part = 10; r.bonus = distBonus(e.km); r.gen = placePts(20, r.n, r.pos, 10); r.catPts = o.cat ? placePts(10, r.catN, r.catPos, 5) : 0; var im = improvement(e.uid, e.km, e.secs / e.km, race.date, e.id); r.imp = im.v; r.impWhy = im.why; }
-      r.total = r.part + r.bonus + r.gen + r.catPts + r.imp; pts[e.id] = r; return;
+      if (e.km >= 3) { r.part = PTS.part; r.bonus = distBonus(e.km); r.gen = placePts(PTS.gen, r.n, r.pos, 10); r.catPts = o.cat ? placePts(PTS.cat, r.catN, r.catPos, 5) : 0; var im = improvement(e.uid, e.km, e.secs / e.km, race.date, e.id); r.imp = im.v; r.impWhy = im.why; }
+      r.exact = r.part + r.bonus + r.gen + r.catPts + r.imp; r.total = Math.round(r.exact); pts[e.id] = r; return;
     }
     var k = e.raceId + '|' + e.km; (groups[k] = groups[k] || []).push(e);
   });
@@ -89,12 +93,12 @@ function recompute() {
       var r = { pos: posOf(g, e), n: g.length, cat: e._cat, part: 0, bonus: 0, gen: 0, catPts: 0, imp: 0, impWhy: '', total: 0, closed: isClosed(race.date) };
       var cl = byCat[e._cat] || [e]; r.catPos = posOf(cl, e); r.catN = cl.length;
       if (e.km >= 3) {
-        r.part = 10; r.bonus = distBonus(e.km);
-        r.gen = placePts(20, r.n, r.pos, 10);
-        r.catPts = e._cat === '—' ? 0 : placePts(10, r.catN, r.catPos, 5);
+        r.part = PTS.part; r.bonus = distBonus(e.km);
+        r.gen = placePts(PTS.gen, r.n, r.pos, 10);
+        r.catPts = e._cat === '—' ? 0 : placePts(PTS.cat, r.catN, r.catPos, 5);
         var im = improvement(e.uid, e.km, e.secs / e.km, race.date, e.id); r.imp = im.v; r.impWhy = im.why;
       }
-      r.total = r.part + r.bonus + r.gen + r.catPts + r.imp;
+      r.exact = r.part + r.bonus + r.gen + r.catPts + r.imp; r.total = Math.round(r.exact);
       pts[e.id] = r;
     });
   });
@@ -104,32 +108,91 @@ function improvement(uid, km, pace, date, exceptId) {
   var b = band(km);
   var prev = activeEntries().filter(function (e) { return e.uid === uid && e.id !== exceptId && band(e.km) === b && S.races[e.raceId].date < date; })
     .sort(function (x, y) { return S.races[x.raceId].date < S.races[y.raceId].date ? 1 : -1; }).slice(0, 5);
-  if (prev.length < 3) return { v: 0, why: 'Servono 3 gare precedenti nella fascia ' + BANDS[b] + ' (ne hai ' + prev.length + ')' };
-  var med = median(prev.map(function (e) { return e.secs / e.km; }));
+  var paces = prev.map(function (e) { return e.secs / e.km; }), old = ((S.hist || {})[uid] || {})[b] || [];
+  paces = paces.concat(old).slice(0, 5);
+  if (paces.length < 3) return { v: 0, why: 'Servono 3 gare precedenti nella fascia ' + BANDS[b] + ' (ne hai ' + paces.length + ')' };
+  var med = median(paces);
   var d = (pace - med) / med, pct = Math.abs(d * 100).toLocaleString('it-IT', { maximumFractionDigits: 1 });
-  if (pace <= med * 0.98) return { v: 5, why: fmtPace(pace) + ' contro la tua mediana di ' + fmtPace(med) + ': ' + pct + '% più veloce' };
+  if (pace <= med * 0.98) return { v: PTS.imp, why: fmtPace(pace) + ' contro la tua mediana di ' + fmtPace(med) + ': ' + pct + '% più veloce' };
   return { v: 0, why: fmtPace(pace) + ' contro la tua mediana di ' + fmtPace(med) + (d < 0 ? ': ' + pct + '% più veloce, serve il 2%' : ': ' + pct + '% più lento') };
 }
 // periodi: 'season' = anno corrente, 'YYYY-MM' = mese
-function inPeriod(dateStr, period) { var y = String(new Date().getFullYear()); return period === 'season' ? dateStr.slice(0, 4) === y : dateStr.slice(0, 7) === period; }
+function inPeriod(dateStr, period) { var y = String(new Date().getFullYear()); return period === 'season' ? dateStr.slice(0, 4) === y : /^\d{4}$/.test(period) ? dateStr.slice(0, 4) === period : dateStr.slice(0, 7) === period; }
 function standingsInd(period, includeOpen) {
   var tot = {};
   activeEntries().forEach(function (e) {
     var r = S.pts[e.id], race = S.races[e.raceId]; if (!r || !inPeriod(race.date, period)) return; if (!r.closed && !includeOpen) return;
-    var t = tot[e.uid] = tot[e.uid] || { uid: e.uid, pts: 0, races: 0 }; t.pts += r.total; t.races++;
+    var t = tot[e.uid] = tot[e.uid] || { uid: e.uid, pts: 0, races: 0 }; t.pts += r.exact; t.races++;
   });
-  return Object.keys(tot).map(function (k) { return tot[k]; }).sort(function (a, b) { return b.pts - a.pts || b.races - a.races; });
+  return Object.keys(tot).map(function (k) { var t = tot[k]; t.pts = Math.round(t.pts); return t; }).sort(function (a, b) { return b.pts - a.pts || b.races - a.races; });
 }
 function standingsTeam(period, mode) {
   var tot = {};
   activeEntries().forEach(function (e) {
     var r = S.pts[e.id], race = S.races[e.raceId]; if (!e.teamId || !S.teams[e.teamId] || !r || !r.closed || !inPeriod(race.date, period)) return;
-    var t = tot[e.teamId] = tot[e.teamId] || { teamId: e.teamId, pts: 0, races: 0, ath: {} }; t.pts += r.total; t.races++; t.ath[e.uid] = 1;
+    var t = tot[e.teamId] = tot[e.teamId] || { teamId: e.teamId, pts: 0, races: 0, ath: {} }; t.pts += r.exact; t.races++; t.ath[e.uid] = 1;
   });
-  var minG = period === 'season' ? 15 : 3;
-  var list = Object.keys(tot).map(function (k) { var t = tot[k]; t.athN = Object.keys(t.ath).length; t.avg = t.pts / t.races; t.ok = mode !== 'avg' || (t.athN >= 3 && t.races >= minG); t.minG = minG; return t; });
+  var minG = period === 'season' || /^\d{4}$/.test(period) ? 15 : 3;
+  var list = Object.keys(tot).map(function (k) { var t = tot[k]; t.athN = Object.keys(t.ath).length; t.avg = Math.round(t.pts / t.races * 10) / 10; t.pts = Math.round(t.pts); t.ok = mode !== 'avg' || (t.athN >= 3 && t.races >= minG); t.minG = minG; return t; });
   list.sort(function (a, b) { if (a.ok !== b.ok) return a.ok ? -1 : 1; return mode === 'avg' ? b.avg - a.avg : b.pts - a.pts; });
   return list;
+}
+
+// =================== stagioni e archivio ===================
+var FIRST_SEASON = 2026;
+function curYear() { return new Date().getFullYear(); }
+function seasonsList() { var set = {}; set[curYear()] = 1; (S.archSeasons || []).forEach(function (s) { set[s] = 1; }); if (S.fromYear) set[S.fromYear] = 1; return Object.keys(set).map(Number).sort(function (a, b) { return b - a; }); }
+function isLiveSeason(y) { return y >= (S.fromYear || curYear()); }
+function periodKey(season, p) { return p === 'season' ? (season === curYear() ? 'season' : String(season)) : p; }
+async function loadArchive(season) {
+  S.arch = S.arch || {}; if (S.arch[season]) return S.arch[season];
+  S.arch[season] = { loading: true };
+  var r = await sb.from('archives').select('season,data,created_at').eq('season', season);
+  S.arch[season] = r.error || !r.data || !r.data[0] ? { missing: true } : { data: r.data[0].data, at: r.data[0].created_at };
+  scheduleRender(); return S.arch[season];
+}
+// costruisce l'archivio di una stagione con i dati caricati (solo amministratori, a stagione chiusa)
+function buildArchive(year) {
+  var Y = String(year), data = { ind: [], teams: [], months: {} }, pts = {}, hist = {};
+  var lastTeam = {};
+  activeEntries().filter(function (e) { return S.races[e.raceId].date.slice(0, 4) === Y; })
+    .sort(function (a, b) { return S.races[a.raceId].date < S.races[b.raceId].date ? -1 : 1; })
+    .forEach(function (e) { var r = S.pts[e.id]; if (r) pts[e.id] = { t: r.total, p: r.pos, n: r.n }; if (e.teamId) lastTeam[e.uid] = e.teamId; });
+  var pack = function (period) {
+    return {
+      ind: standingsInd(period).map(function (s) { var t = S.teams[lastTeam[s.uid]]; return [s.uid, s.pts, s.races, t ? t.name : '']; }),
+      teams: standingsTeam(period, 'tot').map(function (t) { var tm = S.teams[t.teamId] || {}; return [t.teamId, tm.name || 'Squadra', tm.color || '#6E6556', t.pts, t.races, t.athN, t.avg]; })
+    };
+  };
+  var s = pack(Y); data.ind = s.ind; data.teams = s.teams;
+  var mset = {}; activeEntries().forEach(function (e) { var d = S.races[e.raceId].date; if (d.slice(0, 4) === Y) mset[d.slice(0, 7)] = 1; });
+  Object.keys(mset).sort().forEach(function (mk) { data.months[mk] = pack(mk); });
+  // storico del passo per il bonus progresso della stagione dopo
+  var byU = {};
+  activeEntries().filter(function (e) { return S.races[e.raceId].date.slice(0, 4) <= Y; }).forEach(function (e) { var b = band(e.km); ((byU[e.uid] = byU[e.uid] || {})[b] = byU[e.uid][b] || []).push([S.races[e.raceId].date, e.secs / e.km]); });
+  var old = S.hist || {};
+  Object.keys(old).forEach(function (u) { Object.keys(old[u]).forEach(function (b) { ((byU[u] = byU[u] || {})[b] = byU[u][b] || []); old[u][b].forEach(function (p) { byU[u][b].push(['0000', p]); }); }); });
+  Object.keys(byU).forEach(function (u) { hist[u] = {}; Object.keys(byU[u]).forEach(function (b) { var l = byU[u][b].sort(function (x, y) { return x[0] < y[0] ? 1 : x[0] > y[0] ? -1 : 0; }); hist[u][b] = l.slice(0, 5).map(function (x) { return Math.round(x[1] * 10) / 10; }); }); });
+  return { data: data, hist: hist, pts: pts };
+}
+async function archiveSeason(year, quiet) {
+  if (S.archiving) return null; S.archiving = true;
+  var a = buildArchive(year), r = await q(sb.rpc('save_archive', { p_season: year, p_data: a.data, p_hist: a.hist, p_pts: a.pts }), quiet);
+  S.archiving = false;
+  if (r !== null) { toast('Stagione ' + year + ' archiviata: classifiche definitive salvate'); await loadAll(); }
+  return r;
+}
+async function loadOlder(uid) {
+  S.older = S.older || {}; if (S.older[uid]) return; S.older[uid] = { loading: true, list: [] };
+  var from = S.fromYear + '-01-01';
+  var r = await allRows(function () { return sb.from('entries').select('id,race_id,user_id,km,secs,status,bib,final,races(id,name,date,town)').eq('user_id', uid).order('id'); });
+  var list = (r.data || []).filter(function (x) { return x.races && x.races.date < from && x.status !== 'removed'; }).map(function (x) {
+    return { id: x.id, raceId: x.race_id, uid: x.user_id, km: Number(x.km), secs: x.secs, bib: x.bib, final: x.final, _race: { id: x.races.id, name: x.races.name, date: x.races.date, town: x.races.town } };
+  }).sort(function (a, b) { return a._race.date < b._race.date ? 1 : -1; });
+  S.older[uid] = { list: list };
+  var years = {}; list.forEach(function (e) { years[e._race.date.slice(0, 4)] = 1; });
+  await Promise.all(Object.keys(years).map(function (y) { return loadArchive(int(y)); }));
+  scheduleRender();
 }
 
 // =================== dati ===================
@@ -149,30 +212,45 @@ function err2msg(e) {
 }
 async function q(promise, quiet) { var r = await promise; if (r.error) { console.warn(r.error); if (!quiet) toast(err2msg(r.error)); return null; } return r.data === null || r.data === undefined ? true : r.data; }
 var loading = false, lastLoad = 0;
+// Supabase restituisce al massimo 1000 righe per richiesta: le leggiamo a pagine
+async function allRows(make, size) { size = size || 1000; var out = [], from = 0;
+  for (;;) { var r = await make().range(from, from + size - 1); if (r.error) return r; var d = r.data || []; out = out.concat(d); if (d.length < size) break; from += size; }
+  return { data: out, error: null }; }
 async function loadAll() {
   if (loading) return; loading = true;
   try {
+    // si scarica solo la stagione in corso (più quella prima, finché non è archiviata)
+    var Y = curYear(), ar = await sb.from('archives').select('season').order('season');
+    var archived = ar.error ? [] : (ar.data || []).map(function (x) { return x.season; });
+    var fromY = Y - 1 >= FIRST_SEASON && archived.indexOf(Y - 1) < 0 ? Y - 1 : Y, fromD = fromY + '-01-01';
+    if (S.fromYear !== fromY || !S.histLoaded) {
+      var hr = archived.indexOf(fromY - 1) >= 0 ? await sb.from('archives').select('hist').eq('season', fromY - 1) : null;
+      S.hist = hr && !hr.error && hr.data && hr.data[0] ? hr.data[0].hist || {} : {}; S.histLoaded = true;
+    }
+    S.archSeasons = archived; S.fromYear = fromY;
     var res = await Promise.all([
-      sb.from('profiles').select('id,nick,sex,birth,team_id,team_changes,photo,pbs,bio'),
-      sb.from('teams').select(TEAM_COLS),
-      sb.from('races').select('id,name,date,town,distances,lat,lon,created_by,official'),
-      sb.from('entries').select('id,race_id,user_id,team_id,km,secs,proof,status,track,gpx_ok,gpx,ocr_ok,proof_note,asset_paths,defense,bib,result_id,official').limit(5000),
-      sb.from('votes').select('entry_id,user_id,team_id,type,reason').limit(10000),
+      allRows(function () { return sb.from('profiles').select('id,nick,sex,birth,team_id,team_changes,photo,pbs,bio,terms_at').order('id'); }),
+      allRows(function () { return sb.from('teams').select(TEAM_COLS).order('id'); }),
+      allRows(function () { return sb.from('races').select('id,name,date,town,distances,lat,lon,created_by,official').gte('date', fromD).order('id'); }),
+      allRows(function () { return sb.rpc('season_entries', { p_from: fromD }).select('id,race_id,user_id,team_id,km,secs,proof,status,track,gpx_ok,gpx,ocr_ok,proof_note,asset_paths,defense,bib,result_id,official').order('id'); }),
+      allRows(function () { return sb.rpc('season_votes', { p_from: fromD }).select('entry_id,user_id,team_id,type,reason').order('entry_id').order('user_id'); }),
       sb.from('app_admins').select('user_id'),
       sb.rpc('my_team_code'),
       sb.from('private_profiles').select('first_name,last_name').eq('id', S.uid)
     ]);
     var bad = res.slice(0, 5).filter(function (r) { return r.error; })[0];
     if (bad) throw bad.error;
-    var m = {}; res[0].data.forEach(function (p) { m[sid(p.id)] = { uid: p.id, nick: p.nick, sex: p.sex, birth: p.birth, teamId: p.team_id, teamChanges: p.team_changes || {}, photo: p.photo || null, pbs: p.pbs || {}, bio: p.bio || '' }; }); S.members = m;
+    var m = {}; res[0].data.forEach(function (p) { m[sid(p.id)] = { uid: p.id, nick: p.nick, sex: p.sex, birth: p.birth, teamId: p.team_id, teamChanges: p.team_changes || {}, photo: p.photo || null, pbs: p.pbs || {}, bio: p.bio || '', termsAt: p.terms_at || null }; }); S.members = m;
     var t = {}; res[1].data.forEach(function (x) { t[x.id] = { id: x.id, name: x.name, town: x.town, color: x.color, access: x.access, admins: x.admins || [], createdBy: x.created_by, logo: x.logo || null }; }); S.teams = t;
     var r = {}; res[2].data.forEach(function (x) { r[x.id] = { id: x.id, name: x.name, date: x.date, town: x.town, distances: (x.distances || []).map(Number), lat: x.lat, lon: x.lon, createdBy: x.created_by, official: x.official || {} }; }); S.races = r; S.results = {};
     var e = {}; res[3].data.forEach(function (x) { e[x.id] = { id: x.id, raceId: x.race_id, uid: x.user_id, teamId: x.team_id, km: Number(x.km), secs: x.secs, proof: x.proof, status: x.status, track: x.track, gpxOk: x.gpx_ok, gpx: x.gpx, ocrOk: x.ocr_ok, proofNote: x.proof_note, assetIds: x.asset_paths || [], defense: x.defense, bib: x.bib, resultId: x.result_id, official: x.official }; }); S.entries = e;
     var v = {}; res[4].data.forEach(function (x) { v[x.entry_id + '__' + x.user_id] = { entryId: x.entry_id, uid: x.user_id, teamId: x.team_id, type: x.type, reason: x.reason }; }); S.votes = v;
-    S.isOwner = !!(res[5].data && res[5].data.length); S.myCode = res[6].data || null; S.priv = (res[7] && res[7].data && res[7].data[0]) || null;
+    S.admins = (res[5].data || []).map(function (x) { return x.user_id; }); S.isOwner = S.admins.indexOf(S.uid) >= 0; S.myCode = res[6].data || null; S.priv = (res[7] && res[7].data && res[7].data[0]) || null;
     S.loaded = { members: true, teams: true, races: true, entries: true, votes: true }; S.offline = false; lastLoad = Date.now();
   } catch (x) { console.warn(x); S.offline = true; if (!lastLoad) S.loaded = { members: true, teams: true, races: true, entries: true, votes: true }; }
   loading = false; recompute(); scheduleRender();
+  // a stagione chiusa, il primo amministratore che apre l'app la archivia
+  if (S.isOwner && S.fromYear < curYear() && isClosed(S.fromYear + '-12-31') && !S.offline && !S.archTried) { S.archTried = true; archiveSeason(S.fromYear, true); }
 }
 async function init() {
   if (!CFG.url || !CFG.anonKey || /INCOLLA/.test(CFG.url + CFG.anonKey)) { fatal('Configurazione mancante: inserisci l’indirizzo e la chiave di Supabase nel file config.js.'); return; }
@@ -203,6 +281,7 @@ function renderAuth() {
   else {
     h += '<label for="ae">Email</label><input id="ae" type="email" data-bind="auth.email" value="' + esc(a.email || '') + '" autocomplete="email" inputmode="email" placeholder="nome@esempio.it">';
     if (a.mode !== 'reset') h += '<label for="ap">Password</label><input id="ap" type="password" data-bind="auth.pass" autocomplete="' + (a.mode === 'signup' ? 'new-password' : 'current-password') + '" placeholder="' + (a.mode === 'signup' ? 'Almeno 8 caratteri' : '') + '">';
+    if (a.mode === 'signup') h += '<label class="chk"><input type="checkbox" id="aterms"' + (a.terms ? ' checked' : '') + '> <span>Ho letto e accetto l’<a href="#" data-act="showLegal">informativa privacy e le condizioni d’uso</a>. Confermo di avere almeno 18 anni.</span></label>';
     h += '<div class="stack" style="margin-top:14px"><button class="btn" data-act="authGo">' + { login: 'Accedi', signup: 'Crea account', reset: 'Inviami il link' }[a.mode] + '</button>';
     if (a.mode === 'login') h += '<button class="btn sec" data-act="authMode" data-v="signup">Sono nuovo: crea un account</button><button class="btn link" data-act="authMode" data-v="reset" style="align-self:center">Password dimenticata?</button>';
     else h += '<button class="btn link" data-act="authMode" data-v="login" style="align-self:center">Ho già un account: accedi</button>';
@@ -228,7 +307,8 @@ function render() {
   var r = route(), v = r.view, html;
   var tabs = $('tabs'); tabs.classList.toggle('hidden', v === 'onboarding');
   [].forEach.call(tabs.querySelectorAll('a'), function (a) { if (a.dataset.tab === v || (v === 'gara' && a.dataset.tab === 'registra' && false)) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  if (v === 'onboarding') html = vOnboarding();
+  if (v !== 'onboarding' && me() && !me().termsAt) { tabs.classList.add('hidden'); html = vTermsGate(); v = 'terms'; }
+  else if (v === 'onboarding') html = vOnboarding();
   else if (v === 'registra') html = vRegistra();
   else if (v === 'gara') html = vGara(r.id);
   else if (v === 'classifiche') html = vClassifiche();
@@ -236,10 +316,132 @@ function render() {
   else if (v === 'profilo') html = vProfilo();
   else if (v === 'atleta') html = r.id === S.uid ? vProfilo() : vProfilo(r.id);
   else if (v === 'modifica') html = vModifica();
+  else if (v === 'privacy') html = vLegal();
+  else if (v === 'punti') html = vPunti();
+  else if (v === 'admin') html = vAdmin();
   else html = vHome();
   S.lastView = v;
   $('main').innerHTML = (S.offline ? '<div class="note" style="margin:10px 0">I dati potrebbero non essere aggiornati.</div>' : '') + html;
   afterRender(v);
+}
+
+// =================== privacy, condizioni, guida ai punti ===================
+// >>> Compila queste due righe con i tuoi dati prima di pubblicare <<<
+var LEGAL = { titolare: 'Federico Maria Mariani', email: 'federico.mariani44@gmail.com', aggiornato: '21 novembre 2026' };
+function legalHtml() {
+  var T = esc(LEGAL.titolare), M = '<a href="mailto:' + esc(LEGAL.email) + '">' + esc(LEGAL.email) + '</a>';
+  return '<div class="doc">' +
+    '<p class="sm">Ultimo aggiornamento: ' + esc(LEGAL.aggiornato) + '</p>' +
+    '<h2>Informativa privacy</h2>' +
+    '<h3>1. Chi gestisce i dati</h3><p>finishr è un progetto amatoriale e gratuito. Il titolare del trattamento è ' + T + ', contattabile a ' + M + '.</p>' +
+    '<h3>2. Quali dati raccogliamo</h3><ul>' +
+    '<li><b>Account:</b> email e password (la password è cifrata e nessuno può leggerla).</li>' +
+    '<li><b>Profilo pubblico:</b> nome pubblico, sesso e anno di nascita (servono per la categoria), squadra, foto, bio e record personali, se li inserisci.</li>' +
+    '<li><b>Dati privati:</b> nome e cognome, usati solo per riconoscerti nelle classifiche ufficiali. Non sono visibili agli altri utenti.</li>' +
+    '<li><b>Gare:</b> tempi, distanze, numero di pettorale, file GPX e tracce, screenshot che carichi come prova, conferme e segnalazioni.</li>' +
+    '<li><b>Classifiche ufficiali:</b> i PDF caricati dagli utenti contengono dati già pubblicati dagli organizzatori (nome, anno, società, categoria, tempo), anche di persone non iscritte a finishr.</li></ul>' +
+    '<h3>3. Perché li usiamo</h3><p>Solo per far funzionare l’app: calcolare punti e classifiche e verificare che i risultati siano veri. La base giuridica è l’esecuzione del servizio che chiedi iscrivendoti (art. 6.1.b GDPR); per le classifiche ufficiali di chi non è iscritto è il legittimo interesse a confrontare i risultati di una gara già pubblici (art. 6.1.f). Non facciamo pubblicità, profilazione o vendita di dati e non usiamo cookie di tracciamento: il telefono memorizza solo quello che serve a tenerti collegato.</p>' +
+    '<h3>4. Chi li vede</h3><p>Tutti gli iscritti vedono il tuo profilo pubblico, le tue gare, i tempi, i punti e le prove (tracce e screenshot), perché servono alla verifica tra utenti. Nome, cognome ed email non sono mai mostrati.</p>' +
+    '<h3>5. Dove sono conservati</h3><p>I dati sono conservati su Supabase, il servizio che fa da database e archivio dell’app; l’app è pubblicata tramite GitHub Pages. Questi fornitori possono trattare dati anche fuori dall’Unione Europea, con le garanzie previste dal GDPR (clausole contrattuali standard).</p>' +
+    '<h3>6. Per quanto tempo</h3><p>Finché hai l’account. Se lo elimini cancelliamo profilo, dati privati, partecipazioni, voti, foto e screenshot. Restano, senza collegamento a te, le gare che hai creato e le classifiche ufficiali che hai caricato, perché servono anche agli altri.</p>' +
+    '<h3>7. I tuoi diritti</h3><p>Puoi vedere, correggere e copiare i tuoi dati da <b>Profilo → Modifica</b> ed eliminare l’account in qualsiasi momento. Per gli altri diritti (opposizione, limitazione) scrivi a ' + M + '. Puoi anche presentare reclamo al Garante per la protezione dei dati personali (garanteprivacy.it). Se compari in una classifica ufficiale caricata qui e non sei iscritto, scrivici e toglieremo il tuo nome.</p>' +
+    '<h3>8. Età</h3><p>finishr è riservata ai maggiorenni.</p>' +
+    '<h2 style="margin-top:22px">Condizioni d’uso</h2><ol>' +
+    '<li><b>Cos’è finishr.</b> Un gioco gratuito tra appassionati di corsa. Non organizza gare e non è collegata a FIDAL, ENDU o agli organizzatori: punti e classifiche non hanno alcun valore ufficiale. Le categorie FIDAL sono usate solo come riferimento.</li>' +
+    '<li><b>Servizio “così com’è”.</b> L’app è offerta senza garanzie: può contenere errori nei dati, nei punti o nelle classifiche, può essere momentaneamente non disponibile, cambiare o chiudere in qualsiasi momento, anche con la perdita dei dati.</li>' +
+    '<li><b>Attività sportiva.</b> Corri sotto la tua responsabilità. finishr non è responsabile di infortuni, problemi di salute o danni legati alle gare o agli allenamenti, né spinge a correre oltre i tuoi limiti.</li>' +
+    '<li><b>Quello che carichi.</b> Sei responsabile di ciò che inserisci: registra solo i tuoi risultati, con dati veri, e carica solo contenuti di cui hai i diritti. Niente contenuti offensivi, illegali o dati di altre persone senza permesso. Come classifiche ufficiali carica solo i PDF pubblicati dagli organizzatori.</li>' +
+    '<li><b>Moderazione.</b> Gli amministratori possono correggere, unire o eliminare gare e classifiche, rimuovere partecipazioni e sospendere o eliminare account che violano queste regole o falsano le classifiche.</li>' +
+    '<li><b>Responsabilità.</b> Nei limiti consentiti dalla legge, il gestore non risponde di danni diretti o indiretti derivanti dall’uso dell’app, dall’impossibilità di usarla o da errori nei dati.</li>' +
+    '<li><b>Modifiche.</b> Queste condizioni possono cambiare: se cambiano in modo importante ti chiederemo di accettarle di nuovo. Si applica la legge italiana.</li></ol>' +
+    '</div>';
+}
+function vLegal() {
+  return '<div class="top"><a href="' + (me() ? '#profilo' : '#') + '" class="btn link" style="color:#171512;padding:0;align-self:flex-start">← Indietro</a><h1>Privacy e condizioni</h1></div><div class="card">' + legalHtml() + '</div>';
+}
+function vTermsGate() {
+  return '<div class="top">' + logoHtml(30) + '<h1>Prima di continuare</h1><p class="sub">Per usare finishr devi leggere e accettare l’informativa privacy e le condizioni d’uso.</p></div>' +
+    '<div class="card"><div style="max-height:46vh;overflow:auto;border:1px solid var(--line,#E5DCCB);border-radius:10px;padding:4px 12px">' + legalHtml() + '</div>' +
+    '<label class="chk"><input type="checkbox" id="gterms"' + (ui.gateTerms ? ' checked' : '') + '> <span>Ho letto e accetto l’informativa privacy e le condizioni d’uso. Confermo di avere almeno 18 anni.</span></label>' +
+    '<div class="stack" style="margin-top:12px"><button class="btn" id="gtermsBtn" data-act="acceptTerms"' + (ui.gateTerms ? '' : ' disabled') + '>Accetto e continuo</button>' +
+    '<button class="btn link" data-act="deleteMe" style="align-self:center">Non accetto: elimina il mio account</button><button class="btn link" data-act="logout" style="align-self:center">Esci</button></div></div>';
+}
+
+function vPunti() {
+  var ex = function (t) { return '<div class="ex">' + t + '</div>'; };
+  return '<div class="top"><a href="#profilo" class="btn link" style="color:#171512;padding:0;align-self:flex-start">← Profilo</a><div class="brand">GUIDA</div><h1>Come si calcolano i punti</h1><p class="sub">In breve: corri, arrivi, prendi punti. Più persone batti, più ne prendi.</p></div>' +
+    '<div class="card doc">' +
+    '<h2>Le voci di ogni gara</h2><p>Ogni gara da almeno 3 km somma fino a cinque voci. Al massimo una gara vale 190 punti.</p>' +
+    '<table class="ptab"><tr><td>Partecipazione</td><td><b>10</b></td></tr><tr><td>Bonus distanza</td><td><b>fino a 20</b></td></tr><tr><td>Classifica generale</td><td><b>fino a 100</b></td></tr><tr><td>Classifica di categoria</td><td><b>fino a 50</b></td></tr><tr><td>Progresso</td><td><b>10</b></td></tr></table>' +
+    '<h3>1. Partecipazione: 10 punti</h3><p>Li prendi per ogni gara da almeno 3 km, comunque arrivi. Sotto i 3 km la gara resta nel tuo profilo ma non dà punti.</p>' +
+    '<h3>2. Bonus distanza</h3><p>Mezza maratona (da 21 km) <b>+10</b>, oltre 30 km <b>+15</b>, maratona (da 42 km) <b>+20</b>.</p>' +
+    '<h3>3. Classifica generale: fino a 100 punti</h3><p>Conta quante persone arrivano dietro di te:</p><div class="formula">100 × (arrivati − posizione + 1) ÷ arrivati</div>' +
+    '<p>Il primo prende 100, l’ultimo una piccola quota, mai zero. Se gli arrivati sono meno di 10, il risultato si moltiplica anche per arrivati ÷ 10: vincere tra pochi vale meno che vincere tra tanti.</p>' +
+    ex('3° su 904 arrivati → 100 × 902 ÷ 904 = <b>99,8</b><br>450° su 904 → 100 × 455 ÷ 904 = <b>50,3</b><br>1° su 4 → 100 × 4 ÷ 4 × 4 ÷ 10 = <b>40</b>') +
+    '<h3>4. Categoria FIDAL: fino a 50 punti</h3><p>Stessa formula con 50 al posto di 100, tra gli atleti della tua categoria. Con meno di 5 atleti si moltiplica anche per atleti ÷ 5.</p>' +
+    '<p>La categoria dipende da sesso ed età compiuta nell’anno della gara: J (18–19 anni), P (20–22), S (23–34), poi SM35, SM40… ogni 5 anni fino a SM60+ (SF per le donne).</p>' +
+    ex('1° su 30 SM40 → <b>50</b> · 10° su 30 → 50 × 21 ÷ 30 = <b>35</b>') +
+    '<h3>5. Progresso: +10</h3><p>Se corri almeno il 2% più veloce della mediana del passo delle tue ultime 5 gare nella stessa fascia di distanza. Servono almeno 3 gare precedenti nella fascia.</p><p class="sm">Fasce: fino a 5 km · oltre 5 fino a 10 · oltre 10 fino alla mezza · oltre la mezza fino a 30 · oltre 30 km.</p>' +
+    '<h2>Un esempio completo</h2>' + ex('5 km, 904 arrivati: 3° assoluto e 1° di categoria.<br>10 (partecipazione) + 99,8 (generale) + 50 (categoria) = 159,8 → <b>160 punti</b>') +
+    '<p>Ogni voce si calcola con i decimali e si arrotonda solo il totale. In classifica stagionale si sommano i punti esatti di tutte le gare e si arrotonda una volta sola alla fine.</p>' +
+    '<h2>Chi conta come “arrivato”</h2><p><b>Con classifica ufficiale</b> (il PDF dell’organizzatore, per esempio ENDU): contano posizione, arrivati e categoria ufficiali, quindi anche chi non usa finishr. Se il PDF ha il real time si usa quello, altrimenti il race time. Se esce una versione aggiornata del PDF si può ricaricare e i punti si ricalcolano.</p>' +
+    '<p><b>Senza classifica ufficiale:</b> la classifica si fa tra gli utenti di finishr che hanno registrato lo stesso percorso, in base ai tempi inseriti.</p>' +
+    '<h2>Provvisori e definitivi</h2><p>Per 5 giorni dopo la gara i punti sono provvisori: arrivano altri utenti, si caricano le classifiche e si verificano le prove. Dopo 5 giorni la gara si chiude e i punti diventano definitivi.</p>' +
+    '<h2>Verifiche</h2><p>Ogni gara ha una prova: risultato ufficiale, file GPX o screenshot. Gli altri utenti possono confermarla o segnalarla. Con 2 segnalazioni di persone diverse la gara va <b>in verifica</b>: un moderatore (un amministratore dell’app o di un’altra squadra) può convalidarla o rimuoverla. Se viene rimossa, i suoi punti spariscono.</p>' +
+    '<h2>Classifiche</h2><p><b>Individuale:</b> somma dei punti delle gare chiuse nella stagione o nel mese.</p><p><b>Squadre, Totale:</b> somma dei punti di tutti i membri. Premia le squadre grandi e attive.</p><p><b>Squadre, Media:</b> punti totali diviso gare corse. Premia la qualità; servono almeno 3 atleti e 15 gare nella stagione (3 nel mese).</p>' +
+    '<p>Se cambi squadra, i punti che hai già fatto restano alla squadra di prima.</p>' +
+    '</div>';
+}
+
+// =================== amministratore ===================
+function normWords(s) { return normName(s).split(' ').filter(function (w) { return w.length >= 3 && !/^\d+$/.test(w) && ['della', 'delle', 'dei', 'del', 'corsa', 'camminata', 'gara', 'run', 'race', 'trail', 'memorial', 'trofeo', 'edizione', 'non', 'competitiva', 'podistica', 'marcia', 'the'].indexOf(w) < 0; }); }
+function similarRaces(name, date, town, exceptId) {
+  var w = normWords(name), tn = normName(town), d0 = new Date(date + 'T12:00:00');
+  return Object.keys(S.races).map(function (k) { return S.races[k]; }).filter(function (r) {
+    if (r.id === exceptId) return false;
+    if (Math.abs((new Date(r.date + 'T12:00:00') - d0) / 864e5) > 1) return false;
+    var rw = normWords(r.name), common = w.filter(function (x) { return rw.indexOf(x) >= 0; }).length;
+    return (tn && normName(r.town) === tn) || common >= 1;
+  });
+}
+function vAdmin() {
+  if (!S.isOwner) return '<div class="top"><h1>Amministratore</h1></div><p class="hint">Questa pagina è solo per gli amministratori.</p>';
+  var A = ui.admin = ui.admin || { q: '' }, h = '<div class="top"><a href="#profilo" class="btn link" style="color:#171512;padding:0;align-self:flex-start">← Profilo</a><div class="brand">AMMINISTRATORE</div><h1>Pannello</h1></div>';
+  var cont = activeEntries().filter(function (e) { return e.status !== 'validated' && entryState(e).contested; });
+  h += '<h2>Gare in verifica</h2>' + (cont.length ? '<div class="list">' + cont.map(function (e) { var r = S.races[e.raceId], st = entryState(e); return '<a class="item" href="#gara-' + esc(r.id) + '"><div class="grow"><b>' + esc(memberName(e.uid)) + '</b><small>' + esc(r.name + ' · ' + dateIt(r.date) + ' · ' + fmtKm(e.km) + ' km · ' + fmtTime(e.secs)) + '</small></div><span class="pill r">' + st.reports + ' segnal.</span></a>'; }).join('') + '</div><p class="hint">Apri la gara e tocca la partecipazione per convalidarla o rimuoverla.</p>' : '<p class="hint">Nessuna partecipazione contestata.</p>');
+  var cnt = function (r) { return activeEntries().filter(function (e) { return e.raceId === r.id; }).length; };
+  var all = Object.keys(S.races).map(function (k) { return S.races[k]; }), seen = {}, pairs = [];
+  all.forEach(function (r) { similarRaces(r.name, r.date, r.town, r.id).forEach(function (o) { var key = [r.id, o.id].sort().join('|'); if (!seen[key]) { seen[key] = 1; pairs.push(cnt(r) <= cnt(o) ? [r, o] : [o, r]); } }); });
+  h += '<h2>Possibili doppioni</h2>' + (pairs.length ? '<div class="list">' + pairs.slice(0, 20).map(function (p) { return '<button class="item" data-act="admRace" data-v="' + esc(p[0].id) + '" data-into="' + esc(p[1].id) + '"><div class="grow"><b>' + esc(p[0].name) + '</b> <span class="sm">(' + cnt(p[0]) + ')</span><small>' + esc(dateIt(p[0].date) + ' · ' + p[0].town) + '</small><b>' + esc(p[1].name) + '</b> <span class="sm">(' + cnt(p[1]) + ')</span><small>' + esc(dateIt(p[1].date) + ' · ' + p[1].town) + '</small></div><span class="pill n">Unisci</span></button>'; }).join('') + '</div>' : '<p class="hint">Nessun doppione trovato.</p>');
+  h += '<h2>Tutte le gare</h2><div class="card"><input id="admq" type="search" data-bind="admin.q" data-live="1" value="' + esc(A.q) + '" placeholder="Cerca gara o comune"><div class="stack" id="admList" style="margin-top:10px">' + admListHtml() + '</div></div>';
+  var Yc = curYear(), pend = S.fromYear < Yc ? S.fromYear : null;
+  h += '<h2>Stagioni</h2><div class="card">' + (S.archSeasons || []).slice().reverse().map(function (y) { return '<p style="margin:4px 0">✓ <b>' + y + '</b> archiviata: classifiche definitive salvate.</p>'; }).join('') +
+    (pend ? (isClosed(pend + '-12-31') ? '<p class="hint">La stagione ' + pend + ' è finita e tutte le gare sono chiuse.</p><button class="btn" data-act="admArchive" data-v="' + pend + '">Archivia la stagione ' + pend + '</button>'
+      : '<p class="hint">La stagione ' + pend + ' si potrà archiviare quando si chiudono le ultime gare (dal ' + (CLOSE_DAYS + 1) + ' gennaio).</p>')
+      : '<p class="hint">Stagione in corso: ' + Yc + '. Quando finisce (dal ' + (CLOSE_DAYS + 1) + ' gennaio) l’archivio si crea da solo la prima volta che un amministratore apre l’app: classifiche annuali e mensili, individuali e squadre, restano consultabili per sempre e l’app scarica solo la stagione nuova.</p>') + '</div>';
+  var adm = (S.admins || []);
+  h += '<h2>Amministratori</h2><div class="list">' + adm.map(function (u) { return '<a class="item" href="#atleta-' + esc(u) + '">' + avatarHtml(u, 30) + '<div class="grow"><b>' + esc(memberName(u)) + (u === S.uid ? ' (tu)' : '') + '</b></div></a>'; }).join('') + '</div><p class="hint">Per nominare un amministratore apri il suo profilo e tocca “Rendi amministratore”. Possono unire, modificare ed eliminare gare, gestire le classifiche ufficiali e moderare le partecipazioni.</p>';
+  return h;
+}
+function admListHtml() {
+  var q = normName((ui.admin || {}).q || ''), list = Object.keys(S.races).map(function (k) { return S.races[k]; })
+    .filter(function (r) { return !q || normName(r.name + ' ' + r.town).indexOf(q) >= 0; }).sort(function (a, b) { return a.date < b.date ? 1 : -1; }).slice(0, 30);
+  return list.map(function (r) { var n = activeEntries().filter(function (e) { return e.raceId === r.id; }).length; return '<button class="item" data-act="admRace" data-v="' + esc(r.id) + '"><div class="grow"><b>' + esc(r.name) + '</b><small>' + esc(dateIt(r.date) + ' · ' + r.town + ' · ' + n + (n === 1 ? ' partecipante' : ' partecipanti') + (Object.keys(r.official || {}).length ? ' · ufficiale' : '')) + '</small></div></button>'; }).join('') || '<p class="hint">Nessuna gara.</p>';
+}
+function admRaceSheet(id, into) {
+  var r = S.races[id], A = ui.admin = ui.admin || { q: '' }; A.edit = { id: id, name: r.name, date: r.date, town: r.town };
+  var cands = into ? [S.races[into]] : similarRaces(r.name, r.date, r.town, id).concat(Object.keys(S.races).map(function (k) { return S.races[k]; }).filter(function (o) { return o.id !== id && Math.abs((new Date(o.date) - new Date(r.date)) / 864e5) <= 3; }))
+    .filter(function (o, i, a) { return a.indexOf(o) === i; }).slice(0, 8);
+  var n = function (x) { return activeEntries().filter(function (e) { return e.raceId === x.id; }).length; };
+  openSheet('<h2>' + esc(r.name) + '</h2><p class="sm">' + esc(dateIt(r.date, true) + ' · ' + r.town + ' · ' + r.distances.map(fmtKm).join(' / ') + ' km · ' + n(r) + ' partecipanti') + '</p>' +
+    '<h3 style="margin-top:14px">Unisci a un’altra gara</h3><p class="hint">Partecipazioni e classifiche ufficiali passano nella gara scelta; questa sparisce. Chi ha registrato tutte e due tiene quella della gara scelta.</p>' +
+    (cands.length ? '<div class="stack">' + cands.map(function (o) { return '<button class="btn sec" data-act="admMerge" data-v="' + esc(id) + '" data-into="' + esc(o.id) + '" style="text-align:left;justify-content:flex-start">→ ' + esc(o.name + ' · ' + dateIt(o.date) + ' · ' + o.town + ' (' + n(o) + ')') + '</button>'; }).join('') + '</div>' : '<p class="hint">Nessuna gara vicina per data.</p>') +
+    '<h3 style="margin-top:16px">Modifica</h3><label for="aen">Nome</label><input id="aen" type="text" maxlength="60" data-bind="admin.ename" value="' + esc(r.name) + '">' +
+    '<div class="row2"><div><label for="aed">Data</label><input id="aed" type="date" data-bind="admin.edate" value="' + esc(r.date) + '" max="' + todayStr() + '"></div><div><label for="aet">Comune</label><input id="aet" type="text" maxlength="40" data-bind="admin.etown" value="' + esc(r.town) + '"></div></div>' +
+    '<div class="stack" style="margin-top:10px"><button class="btn" data-act="admSave" data-v="' + esc(id) + '">Salva le modifiche</button>' +
+    '<a class="btn sec" href="#gara-' + esc(id) + '" data-act="closeSheetGo">Apri la gara</a>' +
+    '<button class="btn danger" data-act="admDelete" data-v="' + esc(id) + '">Elimina la gara</button><button class="btn link" data-act="closeSheet">Chiudi</button></div>');
+  A.ename = r.name; A.edate = r.date; A.etown = r.town;
 }
 
 // =================== viste ===================
@@ -254,6 +456,7 @@ function shieldHtml(team, size) { var s = size || 48;
   return '<svg class="shield" aria-hidden="true" viewBox="0 0 24 24" style="width:' + s + 'px;height:' + s + 'px;background:transparent;border-radius:0"><path d="M12 2.5l8.5 3.2v6.3c0 4.9-3.6 8.4-8.5 9.7-4.9-1.3-8.5-4.8-8.5-9.7V5.7z" fill="' + esc(team ? team.color : '#9C9381') + '"/><path d="M8.6 12.2l2.3 2.3 4.5-4.5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
 function proofPill(e, st) {
   if (e.resultId && e.official && e.status !== 'removed' && !st.contested) return '<span class="pill g">Ufficiale ✓</span>';
+  if (e.proof === 'official' && !e.resultId) return '<span class="pill n">Da ricollegare</span>';
   if (e.status === 'validated') return '<span class="pill g">Validata</span>';
   if (st.contested) return '<span class="pill r">In verifica</span>';
   if (e.proof === 'gpx') return '<span class="pill ' + (e.gpxOk ? 'g' : 'n') + '">GPX' + (e.gpxOk ? ' ✓' : '') + '</span>';
@@ -316,7 +519,7 @@ function vHome() {
   var m = me(), season = standingsInd('season'), myIdx = season.findIndex(function (s) { return s.uid === S.uid; });
   var myPts = myIdx >= 0 ? season[myIdx].pts : 0, team = S.teams[m.teamId];
   var mine = activeEntries().filter(function (e) { return e.uid === S.uid; }).sort(function (a, b) { return S.races[a.raceId].date < S.races[b.raceId].date ? 1 : -1; });
-  var pending = mine.filter(function (e) { return S.pts[e.id] && !S.pts[e.id].closed; }).reduce(function (s, e) { return s + S.pts[e.id].total; }, 0);
+  var pending = mine.filter(function (e) { return S.pts[e.id] && !S.pts[e.id].closed; }).reduce(function (s, e) { return s + S.pts[e.id].exact; }, 0); pending = Math.round(pending);
   var cat = category(m.sex, m.birth, new Date().getFullYear());
   var teamTxt = '';
   if (team) { var tt = standingsTeam('season', 'tot'), ta = standingsTeam('season', 'avg'); var pt = tt.findIndex(function (t) { return t.teamId === team.id; }), pa = ta.filter(function (t) { return t.ok; }).findIndex(function (t) { return t.teamId === team.id; });
@@ -326,8 +529,8 @@ function vHome() {
     .sort(function (a, b) { return a.date < b.date ? 1 : -1; });
   var h = '<div class="top"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div><div class="sub">Stagione ' + new Date().getFullYear() + '</div><h1>Ciao ' + esc(m.nick.split(' ')[0]) + '</h1></div><span class="pill g">' + esc(catLabel(cat)) + '</span></div>' +
     '<div style="display:flex;justify-content:space-between;align-items:flex-end"><div><div class="sub">I tuoi punti</div><div class="big num">' + fmtN(myPts) + '</div></div><div style="text-align:right"><div class="sub">Classifica individuale</div><div class="num" style="font-size:24px;font-weight:700">' + (myIdx >= 0 ? (myIdx + 1) + '° <span style="font-size:18px;color:#6E6556">su ' + season.length + '</span>' : '—') + '</div></div></div>' +
-    (pending ? '<div class="banner"><span>+' + pending + ' punti in attesa: diventano definitivi alla chiusura delle gare (7 giorni)</span></div>' : '') + teamTxt + '</div>';
-  h += '<div class="card"><h3>Hai fatto una gara?</h3><p class="hint">Registrala entro 7 giorni: cercala tra quelle inserite o creala tu.</p><a class="btn" href="#registra">+ Registra una gara</a></div>';
+    (pending ? '<div class="banner"><span>+' + pending + ' punti in attesa: diventano definitivi alla chiusura delle gare (5 giorni)</span></div>' : '') + teamTxt + '</div>';
+  h += '<div class="card"><h3>Hai fatto una gara?</h3><p class="hint">Registrala entro 5 giorni: cercala tra quelle inserite o creala tu.</p><a class="btn" href="#registra">+ Registra una gara</a></div>';
   if (open.length) h += '<h2>Classifiche aperte</h2><div class="list" style="margin-bottom:14px">' + open.map(function (r) {
     var my = mine.filter(function (e) { return e.raceId === r.id; })[0], p = my && S.pts[my.id];
     return '<a class="item" href="#gara-' + esc(r.id) + '"><div class="grow"><b>' + esc(r.name) + '</b><small>' + esc(dateIt(r.date) + ' · ' + r.town + ' · ' + r._n + ' runner') + '</small></div><div class="right"><span class="pill o">chiude tra ' + Math.max(0, CLOSE_DAYS - daysSince(r.date)) + ' gg</span>' + (p ? '<small class="sm">Tu: ' + p.pos + '° · +' + p.total + '</small>' : '') + '</div></a>';
@@ -344,8 +547,9 @@ function entryRow(e) {
 function indList(list, compact) {
   if (!list.length) return '<p class="hint">Nessun punto ancora: le classifiche si riempiono quando le gare si chiudono.</p>';
   return '<div class="list">' + list.map(function (s, i) {
-    var m = S.members[sid(s.uid)] || {}, t = S.teams[m.teamId];
-    return '<a class="item' + (s.uid === S.uid ? ' me' : '') + '" href="#atleta-' + esc(s.uid) + '"><span class="pos">' + (s.pos || (i + 1)) + '</span>' + avatarHtml(s.uid, 34) + '<div class="grow"><b>' + esc(s.uid === S.uid ? 'Tu' : (m.nick || 'Runner')) + '</b><small>' + esc(catLabel(category(m.sex, m.birth, new Date().getFullYear())) + ' · ' + (t ? t.name : 'senza squadra') + ' · ' + s.races + (s.races === 1 ? ' gara' : ' gare')) + '</small></div><b>' + fmtN(s.pts) + '</b></a>';
+    var mm = S.members[sid(s.uid)], m = mm || {}, t = S.teams[m.teamId], tn = s.teamName !== undefined ? s.teamName : (t ? t.name : '');
+    var inner = '<span class="pos">' + (s.pos || (i + 1)) + '</span>' + avatarHtml(s.uid, 34) + '<div class="grow"><b>' + esc(s.uid === S.uid ? 'Tu' : (mm ? m.nick : 'Ex atleta')) + '</b><small>' + esc((mm ? catLabel(category(m.sex, m.birth, s.year || new Date().getFullYear())) + ' · ' : '') + (tn || 'senza squadra') + ' · ' + s.races + (s.races === 1 ? ' gara' : ' gare')) + '</small></div><b>' + fmtN(s.pts) + '</b>';
+    return mm ? '<a class="item' + (s.uid === S.uid ? ' me' : '') + '" href="#atleta-' + esc(s.uid) + '">' + inner + '</a>' : '<div class="item">' + inner + '</div>';
   }).join('') + '</div>';
 }
 
@@ -354,6 +558,7 @@ function newReg() { return { step: 'gara', q: '', raceId: null, create: false, n
 function vRegistra() {
   var R = ui.reg = ui.reg || newReg();
   var steps = { gara: 1, tempo: 2, prova: 3, ufficiale: 3, pdf: 2, riepilogo: 4 }, n = steps[R.step] || 4;
+  if (R.step === 'pdf' && R.pdf && R.pdf.replace) return '<div class="top"><div class="brand">CLASSIFICA UFFICIALE</div><h1>PDF aggiornato</h1></div>' + regPdf(R);
   var head = R.step === 'fatto' ? '' : '<div class="top"><div class="brand">PASSO ' + n + ' DI 4</div><h1>' + { gara: 'Scegli la gara', tempo: 'Percorso e tempo', prova: 'Carica la prova', ufficiale: 'Trovati in classifica', pdf: 'Classifica ufficiale', riepilogo: 'Riepilogo' }[R.step] + '</h1><div class="bar" style="background:#DCCAA9"><div style="width:' + (n * 25) + '%;background:#B5482B"></div></div></div>';
   if (R.step === 'gara') return head + regGara(R);
   if (R.step === 'tempo') return head + regTempo(R);
@@ -375,7 +580,7 @@ function regGara(R) {
   }
   var q = R.q.trim().toLowerCase();
   var list = recentRaces().filter(function (r) { return !q || r.name.toLowerCase().indexOf(q) !== -1 || r.town.toLowerCase().indexOf(q) !== -1; }).sort(function (a, b) { return a.date < b.date ? 1 : -1; });
-  return '<div class="card"><label for="rq" style="margin-top:0">Che gara hai corso?</label><input id="rq" type="search" data-bind="reg.q" data-live="1" value="' + esc(R.q) + '" placeholder="Nome della gara o comune"><p class="hint">Solo le gare degli ultimi 7 giorni.</p>' +
+  return '<div class="card"><label for="rq" style="margin-top:0">Che gara hai corso?</label><input id="rq" type="search" data-bind="reg.q" data-live="1" value="' + esc(R.q) + '" placeholder="Nome della gara o comune"><p class="hint">Solo le gare degli ultimi 5 giorni.</p>' +
     '<div class="stack" id="raceList">' + raceListHtml(list, q) + '</div>' +
     '<p class="hint" style="margin-top:14px">Non la trovi? Sei il primo a registrarla.</p><button class="btn sec" data-act="regCreateOn">+ Crea una nuova gara</button></div>';
 }
@@ -384,7 +589,7 @@ function raceListHtml(list, q) {
     var n = activeEntries().filter(function (e) { return e.raceId === r.id; }).length;
     var mine = activeEntries().some(function (e) { return e.raceId === r.id && e.uid === S.uid; });
     return '<button class="radio" data-act="regPick" data-v="' + esc(r.id) + '"><b>' + esc(r.name) + '</b><small class="sm">' + esc(dateIt(r.date) + ' · ' + r.town + ' · ' + r.distances.map(fmtKm).join(' / ') + ' km · ' + n + ' registrati' + (mine ? ' · già registrata da te' : '')) + '</small></button>';
-  }).join('') : '<p class="hint">' + (q ? 'Nessuna gara trovata con questo nome.' : 'Nessuna gara negli ultimi 7 giorni.') + '</p>';
+  }).join('') : '<p class="hint">' + (q ? 'Nessuna gara trovata con questo nome.' : 'Nessuna gara negli ultimi 5 giorni.') + '</p>';
 }
 function regTempo(R) {
   var race = S.races[R.raceId]; var secs = int(R.h) * 3600 + int(R.m) * 60 + int(R.s);
@@ -423,7 +628,7 @@ function ptsTable(p) {
   rows.push(['Piazzamento generale', p.pos + '° su ' + p.n + (p.official ? ' (classifica ufficiale)' : '') + (p.n < 10 ? ' (pochi partecipanti, punti ridotti)' : ''), p.gen]);
   rows.push(['Piazzamento di categoria ' + catLabel(p.cat), p.cat === '—' ? 'Categoria non disponibile' : p.catPos + '° su ' + p.catN + (p.catN < 5 ? ' (pochi in categoria, punti ridotti)' : ''), p.catPts]);
   rows.push(['Miglioramento', p.impWhy, p.imp]);
-  return '<table class="pts"><tbody>' + rows.map(function (r) { return '<tr><td>' + esc(r[0]) + '<small>' + esc(r[1]) + '</small></td><td>' + r[2] + '</td></tr>'; }).join('') + '</tbody></table>';
+  return '<table class="pts"><tbody>' + rows.map(function (r) { return '<tr><td>' + esc(r[0]) + '<small>' + esc(r[1]) + '</small></td><td>' + fmtD(r[2]) + '</td></tr>'; }).join('') + '</tbody></table>' + '<p class="hint" style="margin-top:6px">Ogni voce è calcolata con i decimali: si arrotonda solo il totale.</p>';
 }
 function regRiepilogo(R) {
   var race = S.races[R.raceId], secs = regSecs(R), p = previewPoints(R);
@@ -431,7 +636,7 @@ function regRiepilogo(R) {
   return '<div class="card"><table class="pts"><tbody>' +
     '<tr><td>Gara</td><td>' + esc(race.name) + '</td></tr><tr><td>Data e luogo</td><td>' + esc(dateIt(race.date) + ' · ' + race.town) + '</td></tr>' +
     '<tr><td>Percorso</td><td>' + fmtKm(R.km) + ' km</td></tr><tr><td>Tempo</td><td>' + fmtTime(secs) + ' (' + fmtPace(secs / R.km) + ')</td></tr><tr><td>Prova</td><td>' + esc(proof) + '</td></tr></tbody></table></div>' +
-    '<div class="card"><h3>Punti stimati</h3><p class="hint">Provvisori: cambiano man mano che gli altri registrano, definitivi dopo 7 giorni.</p>' + ptsTable(p) +
+    '<div class="card"><h3>Punti stimati</h3><p class="hint">Provvisori: cambiano man mano che gli altri registrano, definitivi dopo 5 giorni.</p>' + ptsTable(p) +
     '<div class="total"><span>Totale stimato</span><span class="num">+' + p.total + '</span></div>' +
     '<p class="hint" style="margin-top:12px">Nome, tempo e prova saranno visibili agli altri partecipanti.</p>' +
     '<div class="stack"><button class="btn" data-act="regSave" id="saveBtn">Invia partecipazione</button><button class="btn link" data-act="regBack" data-v="prova" style="align-self:center">Indietro</button></div></div>';
@@ -439,7 +644,7 @@ function regRiepilogo(R) {
 function regFatto(R) {
   var e = S.entries[R.savedId], p = e && S.pts[e.id], race = S.races[R.raceId];
   return '<div class="center"><div style="width:84px;height:84px;border-radius:42px;background:#F5DED5;display:flex;align-items:center;justify-content:center" aria-hidden="true"><svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#B5482B" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>' +
-    '<h1>Partecipazione registrata</h1><p class="hint" style="max-width:320px">' + (p ? 'Sei ' + p.pos + '° su ' + p.n + ' nella classifica provvisoria di ' + esc(race.name) + ' (+' + p.total + ' punti stimati).' : '') + ' Diventa definitiva dopo 7 giorni.</p>' +
+    '<h1>Partecipazione registrata</h1><p class="hint" style="max-width:320px">' + (p ? 'Sei ' + p.pos + '° su ' + p.n + ' nella classifica provvisoria di ' + esc(race.name) + ' (+' + p.total + ' punti stimati).' : '') + ' Diventa definitiva dopo 5 giorni.</p>' +
     '<div class="stack" style="width:100%"><button class="btn" data-act="story" data-v="' + esc(R.savedId) + '">Condividi nelle storie</button><a class="btn sec" href="#gara-' + esc(R.raceId) + '">Vedi la classifica della gara</a><button class="btn link" data-act="regNew" style="align-self:center">Registra un’altra gara</button></div></div>';
 }
 
@@ -530,7 +735,7 @@ function shotHtml(R) {
     if (r.date) { out.push(C('ok', '✓', 'Data trovata', 'La data della gara compare negli screenshot')); ok++; } else out.push(C('wa', '!', r.rel ? 'Data relativa' : 'Data non trovata', r.rel ? 'Dice «oggi» o «ieri»: valida solo se caricato subito' : 'La data della gara non compare: puoi aggiungere uno screenshot che la mostri'));
     if (done.length < R.shots.length) out.push(C('wa', '!', 'Alcune immagini non lette', (R.shots.length - done.length) + ' screenshot non leggibili automaticamente'));
   }
-  out.push(C('wa', '!', 'Luogo da confermare', 'Lo verificano gli altri partecipanti nei 7 giorni'));
+  out.push(C('wa', '!', 'Luogo da confermare', 'Lo verificano gli altri partecipanti nei 5 giorni'));
   R.shotOk = ok === 3; R.shotVerdict = ok === 3 ? 'Screenshot, dati trovati' : 'Screenshot da verificare';
   return '<div style="margin-top:12px"><span class="pill ' + (ok === 3 ? 'g' : 'n') + '">' + R.shotVerdict + '</span></div>' + imgs + '<ul class="checks">' + out.join('') + '</ul>';
 }
@@ -542,12 +747,32 @@ async function shrinkImage(file) {
 }
 
 // ---------- pagina gara ----------
+function raceOffListHtml(id, km) {
+  var race = S.races[id], closed = isClosed(race.date), rows = ((S.results || {})[id] || []).filter(function (x) { return x.km === km; });
+  var nq = normName(ui.race.offQ || ''), byRes = {};
+  activeEntries().forEach(function (e) { if (e.resultId) byRes[e.resultId] = e; });
+  var list = nq ? rows.filter(function (x) { var e = byRes[x.id], m = e ? S.members[sid(e.uid)] || {} : {}; return normName(x.name).indexOf(nq) !== -1 || (x.bib && x.bib.replace(/^0+/, '') === nq.replace(/^0+/, '')) || (m.nick && normName(m.nick).indexOf(nq) !== -1); }) : rows;
+  var lim = ui.race.offShow || 100, more = list.length - lim;
+  // le mie righe e quelle degli iscritti in cima solo se non si cerca: mostriamo l'ordine d'arrivo vero
+  var html = list.slice(0, lim).map(function (x) {
+    var e = byRes[x.id];
+    if (e) { var p = S.pts[e.id] || {}, m = S.members[sid(e.uid)] || {}, t = S.teams[e.teamId];
+      return '<button class="item' + (e.uid === S.uid ? ' me' : '') + '" data-act="entry" data-v="' + esc(e.id) + '"><span class="pos">' + x.pos + '</span>' + avatarHtml(e.uid, 34) + '<span class="grow"><b>' + esc((m.nick || 'Runner') + (e.uid === S.uid ? ' (tu)' : '')) + '</b><small>' + esc([x.name, x.category || '', t ? t.name : ''].filter(Boolean).join(' · ')) + '</small></span><span class="right"><b>' + (x.secs ? fmtTime(x.secs) : '') + '</b><span class="pill o">+' + (p.total || 0) + '</span></span></button>'; }
+    var tag = closed ? 'div' : 'button';
+    return '<' + tag + ' class="item"' + (closed ? '' : ' data-act="offRowPick" data-v="' + esc(x.id) + '"') + '><span class="pos">' + x.pos + '</span><span class="grow"><span style="font-weight:500">' + esc(x.name) + '</span><small>' + esc([x.bib ? 'pett. ' + x.bib : '', x.category || '', x.club || ''].filter(Boolean).join(' · ')) + '</small></span><span class="right"><span class="sm">' + (x.secs ? fmtTime(x.secs) : '') + '</span></span></' + tag + '>';
+  }).join('');
+  if (!list.length) html = '<div class="item"><span class="sm">Nessuna riga trovata.</span></div>';
+  if (more > 0) html += '<button class="item" data-act="raceOffMore" style="justify-content:center;color:var(--o);font-weight:600">Mostra altri ' + Math.min(100, more) + ' (ne restano ' + more + ')</button>';
+  return html;
+}
 function vGara(id) {
   var race = S.races[id]; if (!race) return '<div class="center"><p class="hint">Gara non trovata.</p><a class="btn sec" href="#home">Torna alla home</a></div>';
   var all = activeEntries().filter(function (e) { return e.raceId === id; });
   var routes = race.distances.slice(); all.forEach(function (e) { if (routes.indexOf(e.km) < 0) routes.push(e.km); });
   var withN = routes.map(function (k) { return [k, all.filter(function (e) { return e.km === k; }).length]; });
-  var route = ui.race.route != null && routes.indexOf(ui.race.route) >= 0 && ui.race.raceId === id ? ui.race.route : (withN.slice().sort(function (a, b) { return b[1] - a[1]; })[0] || [routes[0]])[0];
+  var route = ui.race.route != null && ui.race.routeManual && routes.indexOf(ui.race.route) >= 0 && ui.race.raceId === id ? ui.race.route : (withN.slice().sort(function (a, b) { var oa = officialFor(race, a[0]), ob = officialFor(race, b[0]); return ((ob ? ob.n : 0) - (oa ? oa.n : 0)) || b[1] - a[1]; })[0] || [routes[0]])[0];
+  if (ui.race.raceId !== id) ui.race.routeManual = false;
+  if (ui.race.raceId !== id || ui.race.route !== route) { ui.race.offQ = ''; ui.race.offShow = 100; }
   ui.race.route = route; ui.race.raceId = id;
   var list = all.filter(function (e) { return e.km === route; }).sort(function (a, b) { var pa = S.pts[a.id] || {}, pb = S.pts[b.id] || {}; if (pa.official && pb.official) return pa.pos - pb.pos; return a.secs - b.secs; });
   var closed = isClosed(race.date), left = CLOSE_DAYS - daysSince(race.date);
@@ -555,12 +780,27 @@ function vGara(id) {
   var h = '<div class="top"><div style="display:flex;justify-content:space-between"><a href="#home" class="btn link" style="color:#171512;padding:0" aria-label="Indietro">← Indietro</a></div>' +
     '<div><div class="sub">' + esc(dateIt(race.date, true) + ' · ' + race.town) + '</div><h1>' + esc(race.name) + '</h1><div class="sub">' + esc('Creata da ' + (creator ? creator.nick : 'un runner') + ' · ' + all.length + ' partecipanti') + '</div></div>' +
     '<div class="banner"><span>' + (closed ? 'Classifica <b>definitiva</b>' : 'Classifica <b>provvisoria</b>: definitiva tra ' + Math.max(0, left) + (Math.max(0, left) === 1 ? ' giorno' : ' giorni')) + '</span></div></div>';
-  h += (routes.length > 1 ? '<div class="seg" role="group" aria-label="Percorso" style="margin-bottom:12px">' + withN.map(function (x) { return '<button data-act="raceRoute" data-v="' + x[0] + '" aria-pressed="' + (x[0] === route) + '">' + fmtKm(x[0]) + ' km · ' + x[1] + '</button>'; }).join('') + '</div>' : '');
+  h += (routes.length > 1 ? '<div class="seg" role="group" aria-label="Percorso" style="margin-bottom:12px">' + withN.map(function (x) { var o = officialFor(race, x[0]); return '<button data-act="raceRoute" data-v="' + x[0] + '" aria-pressed="' + (x[0] === route) + '">' + fmtKm(x[0]) + ' km · ' + (o ? o.n : x[1]) + '</button>'; }).join('') + '</div>' : '');
   var offR = officialFor(race, route);
-  if (offR) h += '<div class="okbox" style="margin-bottom:10px"><b>Classifica ufficiale caricata</b>: ' + offR.n + ' arrivati sui ' + fmtKm(route) + ' km. I punti di chi si è riconosciuto si calcolano su questa classifica.' + (offR.by === S.uid && !closed ? '<button class="btn link" data-act="pdfDelete" data-v="' + esc(id) + '" data-km="' + route + '" style="padding:0;margin-top:4px">Eliminala (se è stata letta male)</button>' : '') + '</div>';
+  if (offR && !closed && (offR.by === S.uid || all.some(function (e) { return e.uid === S.uid; }))) h += '<button class="btn sec" data-act="pdfUpdate" data-v="' + esc(id) + '" data-km="' + route + '" style="margin-bottom:10px">È uscito un PDF aggiornato? Caricalo</button>';
+  if (offR) { if (offR.by === S.uid && !closed) h += '<button class="btn link" data-act="pdfDelete" data-v="' + esc(id) + '" data-km="' + route + '" style="padding:0;min-height:0;margin-bottom:10px;font-size:13px;font-weight:500;color:var(--mut);text-decoration:underline">Hai caricato tu questa classifica: eliminala se è stata letta male</button>'; }
   else if (!closed) h += '<button class="btn sec" data-act="pdfFor" data-v="' + esc(id) + '" style="margin-bottom:10px">Carica la classifica ufficiale (PDF)</button>';
-  h += '<p class="hint">Tocca un runner per vedere la prova, confermarla o segnalarla.</p>';
-  h += list.length ? '<div class="list">' + list.map(function (e) {
+  if (offR) {
+    if (!S.results || !S.results[id]) { loadResults(id).then(function () { if (location.hash.indexOf('#gara-') === 0) render(); }); h += '<p class="hint">Carico la classifica ufficiale…</p>'; }
+    else {
+      var rows = S.results[id].filter(function (x) { return x.km === route; }), inApp = rows.filter(function (x) { return x.claimed_by; }).length;
+      var minePos = rows.filter(function (x) { return x.claimed_by === S.uid; })[0];
+      h += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin:4px 0 8px"><h2 style="margin:0">Classifica ufficiale</h2><span class="sm">' + rows.length + ' arrivati · ' + inApp + ' su finishr</span></div>';
+      if (!closed && !minePos) h += '<div class="okbox" style="margin:0 0 10px"><b>Hai corso questa gara?</b> Cerca il tuo nome e tocca la tua riga: ti prendi la partecipazione e i punti, senza caricare prove.</div>';
+      h += '<input id="roq" type="search" data-bind="race.offQ" data-live="1" value="' + esc(ui.race.offQ || '') + '" placeholder="Cerca nome o pettorale" style="margin-bottom:10px">';
+      h += '<div class="list" id="raceOffList">' + raceOffListHtml(id, route) + '</div>';
+      var others = list.filter(function (e) { return !e.resultId; });
+      if (others.length) h += '<h3 style="margin:18px 0 6px">Registrati con GPX o screenshot</h3><p class="hint">Non si sono ancora trovati nella classifica ufficiale: i loro punti si calcolano solo tra chi usa l’app.</p>';
+      list = others;
+    }
+  }
+  if (!offR || list.length) h += '<p class="hint">Tocca un runner per vedere la prova, confermarla o segnalarla.</p>';
+  if (!offR || list.length) h += list.length ? '<div class="list">' + list.map(function (e) {
     var p = S.pts[e.id] || {}, m = S.members[sid(e.uid)] || {}, t = S.teams[e.teamId], st = entryState(e);
     return '<button class="item' + (e.uid === S.uid ? ' me' : '') + '" data-act="entry" data-v="' + esc(e.id) + '"><span class="pos">' + (p.pos || '') + (p.official ? '<small class="sm" style="display:block;font-weight:400">uff.</small>' : '') + '</span><span class="grow"><b>' + esc(e.uid === S.uid ? m.nick + ' (tu)' : m.nick || 'Runner') + '</b><small>' + esc(catLabel(p.cat || '—') + ' · ' + (t ? t.name : 'senza squadra') + ' · ' + fmtPace(e.secs / e.km)) + '</small></span><span class="right"><b>' + fmtTime(e.secs) + '</b>' + proofPill(e, st) + '</span></button>';
   }).join('') + '</div>' : '<p class="hint">Nessuno ha ancora registrato questo percorso.</p>';
@@ -607,40 +847,55 @@ function entrySheet(id, mode) {
   openSheet(h);
 }
 function publicUrl(path) { return sb.storage.from('screenshots').getPublicUrl(path).data.publicUrl; }
-function openSheet(inner) { $('sheet').innerHTML = '<div class="sheet" data-act="sheetBg">' + inner + '</div>'; var f = $('sheet').querySelector('button,input'); if (f) f.focus({ preventScroll: true }); }
+function openSheet(inner) { if (inner.indexOf('<div class="panel"') !== 0) inner = '<div class="panel" role="dialog">' + inner + '</div>'; $('sheet').innerHTML = '<div class="sheet" data-act="sheetBg">' + inner + '</div>'; var f = $('sheet').querySelector('button,input'); if (f) f.focus({ preventScroll: true }); }
 function closeSheet() { $('sheet').innerHTML = ''; ui.reportReason = null; }
 
 // ---------- classifiche ----------
-function monthsAvailable() { var y = String(new Date().getFullYear()), set = {}; activeEntries().forEach(function (e) { var d = S.races[e.raceId].date; if (d.slice(0, 4) === y) set[d.slice(0, 7)] = 1; }); set[todayStr().slice(0, 7)] = 1; return Object.keys(set).sort().reverse(); }
+function monthsAvailable(season) { season = season || curYear(); var y = String(season), set = {}; activeEntries().forEach(function (e) { var d = S.races[e.raceId].date; if (d.slice(0, 4) === y) set[d.slice(0, 7)] = 1; }); if (season === curYear()) set[todayStr().slice(0, 7)] = 1; return Object.keys(set).sort().reverse(); }
 function vClassifiche() {
-  var c = ui.cls, months = monthsAvailable();
+  var c = ui.cls, seasons = seasonsList(), sy = int(c.season) || curYear(); if (seasons.indexOf(sy) < 0) sy = curYear();
+  var live = isLiveSeason(sy), A = null;
+  if (!live) { A = (S.arch || {})[sy]; if (!A) { loadArchive(sy); A = { loading: true }; } }
+  var months = live ? monthsAvailable(sy) : A.data ? Object.keys(A.data.months || {}).sort().reverse() : [];
   var h = '<div class="top"><h1>Classifiche</h1><div class="seg" role="group" aria-label="Tipo" style="background:#DCCAA9"><button data-act="cls" data-k="kind" data-v="ind" aria-pressed="' + (c.kind === 'ind') + '">Individuale</button><button data-act="cls" data-k="kind" data-v="team" aria-pressed="' + (c.kind === 'team') + '">Squadre</button></div></div>';
-  h += '<div class="chips" role="group" aria-label="Periodo" style="margin-bottom:10px">' + [['season', 'Stagione ' + new Date().getFullYear()]].concat(months.map(function (m) { return [m, MESI_L[int(m.slice(5)) - 1].replace(/^./, function (x) { return x.toUpperCase(); })]; })).map(function (o) { return '<button data-act="cls" data-k="period" data-v="' + o[0] + '" aria-pressed="' + (c.period === o[0]) + '">' + o[1] + '</button>'; }).join('') + '</div>';
+  if (seasons.length > 1) h += '<div class="seg" role="group" aria-label="Stagione" style="margin-bottom:8px">' + seasons.map(function (y) { return '<button data-act="cls" data-k="season" data-v="' + y + '" aria-pressed="' + (y === sy) + '">' + y + '</button>'; }).join('') + '</div>';
+  h += '<div class="chips" role="group" aria-label="Periodo" style="margin-bottom:10px">' + [['season', 'Stagione ' + sy]].concat(months.map(function (m) { return [m, MESI_L[int(m.slice(5)) - 1].replace(/^./, function (x) { return x.toUpperCase(); })]; })).map(function (o) { return '<button data-act="cls" data-k="period" data-v="' + o[0] + '" aria-pressed="' + (c.period === o[0]) + '">' + o[1] + '</button>'; }).join('') + '</div>';
+  if (!live && !A.data) return h + '<p class="hint">' + (A.loading ? 'Carico l’archivio…' : 'Archivio della stagione ' + sy + ' non disponibile.') + '</p>';
+  var per = c.period === 'season' || months.indexOf(c.period) >= 0 ? c.period : 'season', pk = periodKey(sy, per), isSeason = per === 'season';
+  var arc = A && A.data ? (isSeason ? A.data : (A.data.months || {})[per] || { ind: [], teams: [] }) : null;
+  if (!live) h += '<p class="hint" style="margin:-2px 0 10px">🏁 Classifica definitiva ' + (isSeason ? 'della stagione ' + sy : 'di ' + MESI_L[int(per.slice(5)) - 1] + ' ' + sy) + '.</p>';
+  else if (sy < curYear()) h += '<p class="hint" style="margin:-2px 0 10px">La stagione ' + sy + ' è finita: le classifiche diventano definitive quando un amministratore la archivia.</p>';
   if (c.kind === 'ind') {
     h += '<div class="seg" role="group" aria-label="Sesso" style="margin-bottom:8px">' + [['all', 'Tutti'], ['F', 'Donne'], ['M', 'Uomini']].map(function (o) { return '<button data-act="cls" data-k="sex" data-v="' + o[0] + '" aria-pressed="' + (c.sex === o[0]) + '">' + o[1] + '</button>'; }).join('') + '</div>';
     if (c.sex !== 'all') h += '<div class="chips" role="group" aria-label="Categoria FIDAL" style="margin-bottom:10px">' + [['all', 'Tutte']].concat(['', '35', '40', '45', '50', '55', '60'].map(function (a) { var code = 'S' + c.sex + a; return [code, catLabel(code)]; })).map(function (o) { return '<button data-act="cls" data-k="cat" data-v="' + o[0] + '" aria-pressed="' + (c.cat === o[0]) + '">' + o[1] + '</button>'; }).join('') + '</div>';
-    var y = new Date().getFullYear();
-    var list = standingsInd(c.period).filter(function (s) { var m = S.members[sid(s.uid)] || {}; if (c.sex !== 'all' && m.sex !== c.sex) return false; if (c.cat !== 'all' && category(m.sex, m.birth, y) !== c.cat) return false; return true; });
+    var y = sy, src = arc ? arc.ind.map(function (r) { return { uid: r[0], pts: r[1], races: r[2], teamName: r[3], year: sy }; }) : standingsInd(pk).map(function (x) { x.year = sy; return x; });
+    var list = src.filter(function (s) { var m = S.members[sid(s.uid)] || {}; if (c.sex !== 'all' && m.sex !== c.sex) return false; if (c.cat !== 'all' && category(m.sex, m.birth, y) !== c.cat) return false; return true; });
     var pos = 0, prev = null; list.forEach(function (s, i) { if (s.pts !== prev) pos = i + 1; s.pos = pos; prev = s.pts; });
     h += indList(list);
     var mi = list.findIndex(function (s) { return s.uid === S.uid; });
-    h += '<p class="hint" style="margin-top:10px">' + (mi >= 0 ? 'Sei ' + list[mi].pos + '° su ' + list.length + '.' : 'Non sei in questa classifica.') + ' Contano solo le gare chiuse (dopo 7 giorni).</p>';
+    h += '<p class="hint" style="margin-top:10px">' + (mi >= 0 ? (live ? 'Sei ' : 'Sei arrivato ') + list[mi].pos + '° su ' + list.length + '.' : 'Non sei in questa classifica.') + (live ? ' Contano solo le gare chiuse (dopo 5 giorni).' : '') + '</p>';
   } else {
     h += '<div class="seg" role="group" aria-label="Classifica squadre" style="margin-bottom:8px"><button data-act="cls" data-k="tmode" data-v="tot" aria-pressed="' + (c.tmode === 'tot') + '">Totale</button><button data-act="cls" data-k="tmode" data-v="avg" aria-pressed="' + (c.tmode === 'avg') + '">Media per gara</button></div>';
-    var minG = c.period === 'season' ? 15 : 3;
-    h += '<p class="hint">' + (c.tmode === 'avg' ? 'Punti diviso gare corse. Servono almeno 3 atleti e ' + minG + ' gare ' + (c.period === 'season' ? 'nella stagione.' : 'nel mese.') : 'Somma dei punti di tutti i membri: premia la squadra più presente.') + '</p>';
-    var tl = standingsTeam(c.period, c.tmode), myTeam = (me() || {}).teamId, r = 0;
+    var minG = isSeason ? 15 : 3;
+    h += '<p class="hint">' + (c.tmode === 'avg' ? 'Punti diviso gare corse. Servono almeno 3 atleti e ' + minG + ' gare ' + (isSeason ? 'nella stagione.' : 'nel mese.') : 'Somma dei punti di tutti i membri: premia la squadra più presente.') + '</p>';
+    var tl, myTeam = (me() || {}).teamId, r = 0;
+    if (arc) {
+      tl = arc.teams.map(function (x) { return { teamId: x[0], name: x[1], color: x[2], pts: x[3], races: x[4], athN: x[5], avg: x[6], minG: minG, ok: c.tmode !== 'avg' || (x[5] >= 3 && x[4] >= minG) }; });
+      tl.sort(function (a, b) { if (a.ok !== b.ok) return a.ok ? -1 : 1; return c.tmode === 'avg' ? b.avg - a.avg : b.pts - a.pts; });
+    } else tl = standingsTeam(pk, c.tmode);
     h += tl.length ? '<div class="list">' + tl.map(function (t) {
-      var team = S.teams[t.teamId]; if (t.ok) r++;
+      var team = S.teams[t.teamId] || { id: t.teamId, name: t.name || 'Squadra', color: t.color || '#6E6556', logo: null }; if (t.ok) r++;
       var miss = []; if (t.athN < 3) miss.push((3 - t.athN) + (3 - t.athN === 1 ? ' atleta' : ' atleti')); if (t.races < t.minG) miss.push((t.minG - t.races) + (t.minG - t.races === 1 ? ' gara' : ' gare'));
       return '<div class="item' + (t.teamId === myTeam ? ' me' : '') + (t.ok ? '' : ' out') + '"><span class="pos">' + (t.ok ? r : '–') + '</span>' + shieldHtml(team, 30) + '<div class="grow"><b>' + esc(team.name) + '</b><small>' + esc(t.ok ? t.athN + ' atleti · ' + t.races + ' gare' + (c.tmode === 'avg' ? ' · ' + fmtN(t.pts) + ' pt' : '') : 'Fuori classifica: mancano ' + miss.join(' e ')) + '</small></div><b>' + (t.ok ? (c.tmode === 'avg' ? fmt1(t.avg) : fmtN(t.pts)) : '') + '</b></div>';
     }).join('') + '</div>' : '<p class="hint">Nessuna squadra ha ancora punti in questo periodo.</p>';
   }
   h += '<details class="card" style="margin-top:14px"><summary style="cursor:pointer;font-weight:700">Come si calcolano i punti</summary><div class="hint" style="margin-top:8px">' +
-    '<p><b>Partecipazione:</b> 10 punti per ogni gara da almeno 3 km. Bonus: mezza maratona +5, oltre 30 km +10, maratona +15.</p>' +
-    '<p><b>Piazzamento:</b> fino a 20 punti nella classifica generale del tuo percorso e fino a 10 in quella di categoria FIDAL. Il primo prende il massimo, l’ultimo 0. Con meno di 10 partecipanti (5 in categoria) i punti si riducono in proporzione.</p>' +
-    '<p><b>Miglioramento:</b> +5 se corri almeno il 2% più veloce della mediana delle tue ultime 5 gare nella stessa fascia di distanza (servono almeno 3 gare).</p>' +
-    '<p><b>Squadre:</b> Totale = somma dei punti dei membri; Media = totale diviso le gare.</p></div></details>';
+    '<p><b>Partecipazione:</b> 10 punti per ogni gara da almeno 3 km. Bonus: mezza maratona +10, oltre 30 km +15, maratona +20.</p>' +
+    '<p><b>Classifica generale:</b> fino a 100 punti, 100 × (arrivati − posizione + 1) ÷ arrivati: il primo prende 100, l’ultimo una piccola quota. Con meno di 10 arrivati si moltiplica anche per arrivati ÷ 10.</p>' +
+    '<p><b>Categoria FIDAL:</b> fino a 50 punti con la stessa formula tra gli atleti della tua categoria. Con meno di 5 atleti si moltiplica anche per atleti ÷ 5.</p>' +
+    '<p><b>Progresso:</b> +10 se corri almeno il 2% più veloce della mediana delle tue ultime 5 gare nella stessa fascia di distanza (servono almeno 3 gare).</p>' +
+    '<p><b>Arrotondamento:</b> ogni voce si calcola con i decimali; si arrotonda solo il totale.</p>' +
+    '<p><b>Squadre:</b> Totale = somma dei punti dei membri; Media = totale diviso le gare.</p><p><a href="#punti" style="font-weight:600">Leggi la guida completa →</a></p></div></details>';
   return h;
 }
 
@@ -675,6 +930,19 @@ function vSquadra() {
 }
 
 // ---------- profilo ----------
+var BIB_COLORS = ['#B5482B', '#171512', '#2F5D50', '#1D4E89', '#7A1F2B', '#B07A12', '#5B3E8C', '#0F6E78'];
+function bibHtml(e, m) {
+  var race = S.races[e.raceId] || e._race, p = S.pts[e.id] || (e.final ? { total: e.final.t } : {}), h = 0, id = String(race.id), tag = S.races[e.raceId] ? 'a' : 'div';
+  for (var i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  var col = BIB_COLORS[h % BIB_COLORS.length], num = String(e.bib || '').trim(), isNum = !!num;
+  var label = isNum ? num : (m.nick || 'Runner').toUpperCase();
+  var size = isNum ? (num.length <= 3 ? 46 : num.length <= 5 ? 38 : 30) : (label.length <= 8 ? 26 : label.length <= 12 ? 21 : 17);
+  return '<' + tag + ' class="bib"' + (tag === 'a' ? ' href="#gara-' + esc(race.id) + '"' : '') + ' style="--bc:' + col + '" aria-label="' + esc(race.name + ', ' + fmtKm(e.km) + ' km, ' + fmtTime(e.secs)) + '">' +
+    '<span class="hole" style="left:7px;top:7px"></span><span class="hole" style="right:7px;top:7px"></span><span class="hole" style="left:7px;bottom:7px"></span><span class="hole" style="right:7px;bottom:7px"></span>' +
+    '<span class="bib-top"><b>' + esc(race.name) + '</b><small>' + esc(dateIt(race.date) + ' · ' + race.town) + '</small></span>' +
+    '<span class="bib-num" style="font-size:' + size + 'px">' + esc(label) + '</span>' +
+    '<span class="bib-foot"><span>' + esc(fmtKm(e.km) + ' km · ' + fmtTime(e.secs)) + '</span>' + (p.total != null ? '<b>+' + p.total + '</b>' : '') + '</span></' + tag + '>';
+}
 function vProfilo(uid) {
   uid = uid || S.uid; var isMe = uid === S.uid, m = S.members[sid(uid)];
   if (!m) return '<div class="top"><a href="#classifiche" class="btn link" style="color:#171512;padding:0;align-self:flex-start">← Classifiche</a><h1>Atleta non trovato</h1></div>';
@@ -691,13 +959,34 @@ function vProfilo(uid) {
   if (anyPb || isMe) h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3>Record personali</h3>' + (isMe ? '<a href="#modifica" class="sm" style="font-weight:600">' + (anyPb ? 'Modifica' : 'Aggiungi') + '</a>' : '') + '</div>' +
     '<div class="pbgrid">' + PB_KEYS.map(function (k) { var v = pbs[k[0]]; return '<div class="pb"><span>' + k[1] + '</span><b class="num">' + (v ? fmtTime(v) : '—') + '</b>' + (v ? '<small>' + fmtPace(v / Number(k[0])) + '</small>' : '') + '</div>'; }).join('') + '</div>' +
     (isMe && !anyPb ? '<p class="hint" style="margin-top:8px">Aggiungi i tuoi PB: li vedranno anche gli altri atleti.</p>' : '') + '</div>';
+  // gare delle stagioni passate (si scaricano solo quando servono)
+  if (S.fromYear > FIRST_SEASON && !(S.older || {})[uid]) loadOlder(uid);
+  var older = ((S.older || {})[uid] || {}).list || [];
+  // racebook: un pettorale per ogni gara corsa
+  var bibsAll = mine.concat(older);
+  if (bibsAll.length) {
+    var showAll = ui.profile.rbAll === uid, shown = showAll ? bibsAll : bibsAll.slice(0, 6);
+    h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline"><h3>Racebook</h3><span class="sm">' + bibsAll.length + (bibsAll.length === 1 ? ' pettorale' : ' pettorali') + '</span></div>' +
+      '<div class="bibs">' + shown.map(function (e) { return bibHtml(e, m); }).join('') + '</div>' +
+      (bibsAll.length > 6 ? '<button class="btn link" data-act="rbAll" data-v="' + esc(uid) + '" style="margin-top:6px">' + (showAll ? 'Mostra meno' : 'Mostra tutti i ' + bibsAll.length + ' pettorali') + '</button>' : '') + '</div>';
+  }
+  // stagioni passate
+  var pastY = {}; older.concat(mine).forEach(function (e) { var yy = int((S.races[e.raceId] || e._race).date.slice(0, 4)); if (yy < y) (pastY[yy] = pastY[yy] || []).push(e); });
+  var pys = Object.keys(pastY).map(Number).sort(function (a, b) { return b - a; });
+  if (pys.length) h += '<div class="card"><h3>Stagioni passate</h3><div class="list" style="margin-top:8px">' + pys.map(function (yy) {
+    var es = pastY[yy], kmT = es.reduce(function (a, e) { return a + e.km; }, 0), A = (S.arch || {})[yy], row = null, n = 0;
+    if (A && A.data) { n = A.data.ind.length; A.data.ind.some(function (r, i) { if (r[0] === uid) { row = { pos: i + 1, pts: r[1] }; return true; } return false; }); }
+    else if (isLiveSeason(yy)) { var st = standingsInd(String(yy)); n = st.length; st.some(function (r, i) { if (r.uid === uid) { row = { pos: i + 1, pts: r.pts }; return true; } return false; }); }
+    else if (!A) loadArchive(yy);
+    return '<button class="item" data-act="clsSeason" data-v="' + yy + '"><span class="pos" style="font-size:20px;min-width:52px">' + yy + '</span><div class="grow"><b>' + (row ? row.pos + '° su ' + n : es.length + (es.length === 1 ? ' gara' : ' gare')) + '</b><small>' + esc((row ? fmtN(row.pts) + ' punti · ' : '') + es.length + (es.length === 1 ? ' gara' : ' gare') + ' · ' + fmtKm(kmT) + ' km') + '</small></div><span aria-hidden="true">›</span></button>';
+  }).join('') + '</div></div>';
   // grafico mensile
   var per = []; for (var i = 0; i < 12; i++) per.push({ pts: 0, secs: 0, km: 0 });
-  thisY.forEach(function (e) { var mo = int(S.races[e.raceId].date.slice(5, 7)) - 1, p = S.pts[e.id]; per[mo].pts += p ? p.total : 0; per[mo].secs += e.secs; per[mo].km += e.km; });
+  thisY.forEach(function (e) { var mo = int(S.races[e.raceId].date.slice(5, 7)) - 1, p = S.pts[e.id]; per[mo].pts += p ? p.exact : 0; per[mo].secs += e.secs; per[mo].km += e.km; });
   var isPts = ui.profile.chart === 'pts', vals = per.map(function (x) { return isPts ? x.pts : (x.km ? x.secs / x.km : 0); }), nz = vals.filter(function (v) { return v > 0; });
   var maxV = Math.max.apply(null, nz.concat([1])), minV = Math.min.apply(null, nz.concat([maxV]));
   h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3>Andamento ' + y + '</h3><div class="seg" role="group" aria-label="Grafico"><button data-act="profChart" data-v="pts" aria-pressed="' + isPts + '">Punti</button><button data-act="profChart" data-v="pace" aria-pressed="' + !isPts + '">Passo</button></div></div><p class="hint">' + (isPts ? 'Punti per mese' : 'Passo medio in gara: barra più alta = più veloce') + '</p>' +
-    '<div class="chart" role="img" aria-label="' + (isPts ? 'Punti per mese' : 'Passo medio per mese') + '">' + vals.map(function (v, i) { var hh = !v ? 0 : (isPts ? Math.round(v / maxV * 90) : Math.round(25 + (maxV === minV ? 60 : (maxV - v) / (maxV - minV) * 65))); return '<div><em>' + (v ? (isPts ? v : fmtPace(v).replace(' /km', '')) : '') + '</em><i style="height:' + hh + 'px' + (i === new Date().getMonth() ? ';background:var(--o)' : '') + '"></i><span>' + MESI[i].charAt(0).toUpperCase() + '</span></div>'; }).join('') + '</div></div>';
+    '<div class="chart" role="img" aria-label="' + (isPts ? 'Punti per mese' : 'Passo medio per mese') + '">' + vals.map(function (v, i) { var hh = !v ? 0 : (isPts ? Math.round(v / maxV * 90) : Math.round(25 + (maxV === minV ? 60 : (maxV - v) / (maxV - minV) * 65))); return '<div><em>' + (v ? (isPts ? Math.round(v) : fmtPace(v).replace(' /km', '')) : '') + '</em><i style="height:' + hh + 'px' + (i === new Date().getMonth() ? ';background:var(--o)' : '') + '"></i><span>' + MESI[i].charAt(0).toUpperCase() + '</span></div>'; }).join('') + '</div></div>';
   // traguardi
   var monthsWith = {}; mine.forEach(function (e) { monthsWith[S.races[e.raceId].date.slice(0, 7)] = 1; });
   var streak = 0, d = new Date(); d.setDate(1); if (!monthsWith[d.getFullYear() + '-' + pad2(d.getMonth() + 1)]) d.setMonth(d.getMonth() - 1); while (monthsWith[d.getFullYear() + '-' + pad2(d.getMonth() + 1)]) { streak++; d.setMonth(d.getMonth() - 1); }
@@ -707,6 +996,13 @@ function vProfilo(uid) {
   var badges = [['Costanza', streak + (streak === 1 ? ' mese' : ' mesi') + ' di fila con una gara (obiettivo 6)', Math.min(1, streak / 6)], ['Giudice di gara', myConf + ' conferme date (obiettivo 10)', Math.min(1, myConf / 10)], ['Squadra unita', 'Una gara con 5 o più compagni', bigTeam ? 1 : 0], ['100 km', fmtN(Math.round(km)) + ' km in gara nella stagione', Math.min(1, km / 100)], ['Esploratore', Object.keys(towns).length + ' di 10 comuni diversi', Math.min(1, Object.keys(towns).length / 10)], ['Mezza', 'Corri una gara da 21 km', maxKm >= 21 ? 1 : 0]];
   h += '<h2>Traguardi</h2><div class="row2" style="margin-bottom:14px">' + badges.map(function (b) { var done = b[2] >= 1; return '<div class="card" style="margin:0;' + (done ? '' : 'background:#FBF7F0;border-style:dashed') + '"><div style="width:34px;height:34px;border-radius:17px;display:flex;align-items:center;justify-content:center;background:' + (done ? '#F5DED5;color:#B5482B' : '#ECE5D8;color:#7A705F') + '" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="6"/><path d="M8.5 14L7 22l5-3 5 3-1.5-8"/></svg></div><b style="display:block;margin-top:6px;font-size:14px">' + esc(b[0]) + '</b><span class="sm">' + esc(b[1]) + '</span>' + (done ? '' : '<div class="bar"><div style="width:' + Math.round(b[2] * 100) + '%"></div></div>') + '</div>'; }).join('') + '</div>';
   h += '<h2>' + (isMe ? 'Le mie gare' : 'Gare') + '</h2>' + (mine.length ? '<div class="list">' + mine.map(entryRow).join('') + '</div>' : '<p class="hint">Ancora nessuna gara.</p>');
+  if (isMe) h += '<div class="list" style="margin-top:18px">' +
+    '<a class="item" href="#punti"><div class="grow"><b>Come si calcolano i punti</b><small>La guida completa, con esempi</small></div><span aria-hidden="true">›</span></a>' +
+    '<a class="item" href="#privacy"><div class="grow"><b>Privacy e condizioni d’uso</b><small>Cosa facciamo con i tuoi dati</small></div><span aria-hidden="true">›</span></a>' +
+    '<a class="item" href="#modifica"><div class="grow"><b>Modifica profilo e account</b><small>Dati, squadra, copia o elimina i tuoi dati</small></div><span aria-hidden="true">›</span></a>' +
+    (S.isOwner ? '<a class="item" href="#admin"><div class="grow"><b>Pannello amministratore</b><small>Doppioni, gare, verifiche</small></div><span aria-hidden="true">›</span></a>' : '') + '</div>' +
+    '<button class="btn link" data-act="logout" style="margin:8px auto 0;display:flex">Esci dall’account</button>';
+  else if (S.isOwner) { var isAd = (S.admins || []).indexOf(uid) >= 0; h += '<button class="btn link" data-act="admSet" data-v="' + esc(uid) + '" data-on="' + (isAd ? '0' : '1') + '" style="margin:14px auto 0;display:flex">' + (isAd ? 'Togli amministratore' : 'Rendi amministratore') + '</button>'; }
   return h;
 }
 function vModifica() {
@@ -723,7 +1019,7 @@ function vModifica() {
     '<div class="stack" style="margin-top:14px"><button class="btn" data-act="editSave">Salva</button></div></div>' +
     '<div class="card"><b>Squadra</b><p class="hint">' + (m.teamId ? 'Sei in ' + esc((S.teams[m.teamId] || {}).name || '') + '. ' : '') + 'Puoi cambiare squadra una volta a stagione; i punti già fatti restano alla squadra di prima.</p>' +
     (changes >= 1 && m.teamId ? '<p class="hint">Hai già cambiato squadra quest’anno.</p>' : '<button class="btn sec" data-act="goJoin">' + (m.teamId ? 'Cambia squadra' : 'Unisciti a una squadra') + '</button>') + '</div>' +
-    '<div class="card"><b>I tuoi dati</b><p class="hint">Puoi copiare tutti i tuoi dati o cancellare il tuo profilo: le tue partecipazioni vengono rimosse dalle classifiche.</p><div class="stack"><button class="btn sec" data-act="exportData">Copia i miei dati</button><button class="btn danger" data-act="deleteMe">Cancella il mio profilo</button></div></div>';
+    '<div class="card"><b>I tuoi dati</b><p class="hint">Puoi copiare tutti i tuoi dati oppure eliminare l’account: si cancellano profilo, gare, punti, foto e screenshot.</p><div class="stack"><button class="btn sec" data-act="exportData">Copia i miei dati</button><button class="btn danger" data-act="deleteMe">Elimina il mio account</button></div><p class="hint" style="margin-top:8px"><a href="#privacy">Privacy e condizioni d’uso</a></p></div>';
 }
 
 // ---------- storia e adesivo ----------
@@ -846,7 +1142,8 @@ function getPdfjs() {
 }
 // estrae le righe di testo del PDF, con due spazi dove c'è uno stacco tra colonne
 async function pdfLines(file) {
-  var lib = await getPdfjs(), buf = await file.arrayBuffer(), doc = await lib.getDocument({ data: new Uint8Array(buf) }).promise, lines = [];
+  var lib = await getPdfjs(), buf = await file.arrayBuffer(), doc = await lib.getDocument({ data: new Uint8Array(buf) }).promise, lines = [], items = [];
+  lines.items = items;
   for (var p = 1; p <= doc.numPages; p++) {
     var page = await doc.getPage(p), tc = await page.getTextContent(), rows = [];
     tc.items.forEach(function (it) {
@@ -859,7 +1156,7 @@ async function pdfLines(file) {
       r.items.sort(function (a, b) { return a.x - b.x; });
       var out = '', end = null;
       r.items.forEach(function (it) { if (end !== null) out += (it.x - end > 6 ? '  ' : (it.x - end > 0.5 ? ' ' : '')); out += it.s.trim(); end = it.x + it.w; });
-      lines.push(out);
+      lines.push(out); items.push(r.items);
     });
   }
   return lines;
@@ -873,13 +1170,32 @@ function parseResultLines(lines, year) {
   var header = lines.filter(function (l) { return /pett|atleta|cognome/i.test(l) && !/^\s*\d/.test(l); })[0] || '';
   var hasPos = header ? /(^|\s)(pos|cl|class|posiz|ord|rank)/i.test(header) : true;
   var hasNaz = /\bnaz/i.test(header);
-  var rows = [];
-  lines.forEach(function (line) {
-    var L = line.replace(/\s+$/, ''); var m0 = L.match(/^\s*(\d{1,5})[.°º)]?\s+/); if (!m0) return;
+  // colonne "race time" e "real time" (ENDU): se c'è il real time si usa quello, altrimenti il race time
+  var TIME_ONLY = /^\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?$/, realX = null, raceX = null, timeKind = null, nReal = 0;
+  var hIdx = lines.indexOf(header), hItems = hIdx >= 0 && lines.items ? lines.items[hIdx] : null;
+  if (hItems) hItems.forEach(function (it, k) {
+    var t = it.s.toLowerCase().trim(), nx = hItems[k + 1], pv = hItems[k - 1] ? hItems[k - 1].s.toLowerCase().trim() : '';
+    var cx = (nx && /^time$/i.test(nx.s.trim()) && /^(real|race|chip)$/.test(t)) ? (it.x + nx.x + nx.w) / 2 : it.x + it.w / 2;
+    if (/real|chip|netto/.test(t)) { if (realX === null) realX = cx; }
+    else if (/race|tempo|lordo/.test(t) || (t === 'time' && !/^(real|race|chip)$/.test(pv))) { if (raceX === null) raceX = cx; }
+  });
+  var rows = [], last = null;
+  lines.forEach(function (line, li) {
+    var L = line.replace(/\s+$/, ''); var m0 = L.match(/^\s*(\d{1,5})[.°º)]?\s+/);
+    if (!m0) { // nomi lunghi che il PDF manda a capo: la riga dopo ha solo il resto del nome
+      var cont = L.trim(); if (last && /^[A-ZÀ-Ý'’.\- ]{2,40}$/.test(cont) && cont.split(' ').length <= 4) last.name = (last.name + ' ' + cont).slice(0, 80); else last = null;
+      return; }
+    last = null;
     var lead = m0[1], rest = L.slice(m0[0].length);
     // tempo: il più lungo tra i tempi che non sono passo (/km) né distacco (+)
     var best = 0, re = /(^|[^+\d:])(\d{1,2}:\d{2}:\d{2}|\d{1,3}:\d{2})(?:[.,]\d+)?(?!\s*\/\s*km)(?![\d:])/g, m;
     while ((m = re.exec(rest))) { var s = timeToSecs(m[2]); if (s > best) best = s; }
+    if (realX !== null && lines.items && lines.items[li]) { // scelgo il tempo in base alla colonna
+      var tReal = 0, tRace = 0;
+      lines.items[li].forEach(function (it) { var t = it.s.trim(); if (!TIME_ONLY.test(t)) return; var cx = it.x + it.w / 2, v = timeToSecs(t.replace(/[.,]\d+$/, ''));
+        if (raceX === null || Math.abs(cx - realX) < Math.abs(cx - raceX)) tReal = v; else tRace = v; });
+      if (tReal) { best = tReal; nReal++; } else if (tRace) best = tRace;
+    }
     var cols = rest.split(/\s{2,}/).map(function (c) { return c.trim(); }).filter(Boolean);
     var bib = hasPos ? null : lead, name = null, club = null, cat = null, sex = null, birth = null, texts = [];
     if (cols.length >= 2) {
@@ -889,6 +1205,8 @@ function parseResultLines(lines, year) {
         if (/^[MF]$/i.test(c)) { if (!sex) sex = c.toUpperCase(); return; }
         if (CAT_RE.test(c)) { if (!cat) cat = c.toUpperCase().replace('-', ''); return; }
         if (/\d{1,2}:\d{2}/.test(c) || /^[+\-]/.test(c) || /\/km|km\/h/i.test(c)) return;
+        var ym = c.match(/^(.*[A-Za-zÀ-ÿ'’.])\s*(\d{4})$/); // nome attaccato all'anno di nascita
+        if (ym && +ym[2] > 1900 && +ym[2] <= (year || 2100)) { texts.push(ym[1]); if (!birth) birth = +ym[2]; return; }
         if (/[A-Za-zÀ-ÿ]{2}/.test(c)) texts.push(c);
       });
       if (hasNaz && texts.length && /^[A-Z]{3}$/.test(texts[texts.length - 1])) texts.pop(); // nazionalità
@@ -903,18 +1221,22 @@ function parseResultLines(lines, year) {
     if (!name || name.replace(/[^A-Za-zÀ-ÿ]/g, '').length < 3) return;
     if (/^(pos|cl|class|nome|cognome|atleta|pett)/i.test(name)) return;
     if (!cat && sex && birth && year && typeof category === 'function') { var c2 = category(sex, birth, year); if (c2 !== '—') cat = c2; }
-    rows.push({ pos: hasPos ? parseInt(lead, 10) : null, bib: bib, name: name.replace(/\s+/g, ' ').slice(0, 80), club: club ? club.slice(0, 80) : null, cat: cat, secs: best || null });
+    last = { pos: hasPos ? parseInt(lead, 10) : null, bib: bib, name: name.replace(/\s+/g, ' ').slice(0, 80), club: club ? club.slice(0, 80) : null, cat: cat, secs: best || null }; rows.push(last);
   });
   // senza tempo non è un arrivo valido (ritirati, squalificati)
   rows = rows.filter(function (r) { return r.secs; });
-  if (hasPos) { var seen = {}; return rows.filter(function (r) { if (seen[r.pos]) return false; seen[r.pos] = 1; return true; }); }
-  rows.sort(function (a, b) { return a.secs - b.secs; });
+  rows.timeKind = nReal === 0 ? 'race' : nReal >= rows.length ? 'real' : 'mixed';
+  if (hasPos && !nReal) { var seen = {}; return rows.filter(function (r) { if (seen[r.pos]) return false; seen[r.pos] = 1; return true; }); }
+  if (hasPos) { var seen2 = {}; rows = rows.filter(function (r) { if (seen2[r.pos]) return false; seen2[r.pos] = 1; return true; }); rows.timeKind = nReal >= rows.length ? 'real' : 'mixed'; }
+  var kind = rows.timeKind;
+  rows.sort(function (a, b) { return a.secs - b.secs || (a.pos || 0) - (b.pos || 0); });
   rows.forEach(function (r, i) { r.pos = i && rows[i - 1].secs === r.secs ? rows[i - 1].pos : i + 1; });
+  rows.timeKind = kind;
   return rows;
 }
 function normName(t) { return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim(); }
 async function loadResults(raceId) {
-  var r = await q(sb.from('results').select('id,race_id,km,pos,bib,name,club,category,secs,claimed_by').eq('race_id', raceId).limit(20000), true);
+  var r = await q(allRows(function () { return sb.from('results').select('id,race_id,km,pos,bib,name,club,category,secs,claimed_by').eq('race_id', raceId).order('pos').order('id'); }), true);
   S.results = S.results || {}; S.results[raceId] = Array.isArray(r) ? r.map(function (x) { x.km = Number(x.km); return x; }) : [];
   return S.results[raceId];
 }
@@ -950,10 +1272,10 @@ function offListHtml(list) {
 function offPointsPreview(R, row) {
   var race = S.races[R.raceId], off = officialFor(race, R.km), rows = S.results[R.raceId].filter(function (x) { return x.km === R.km; });
   var n = off ? off.n : rows.length, catRows = row.category ? rows.filter(function (x) { return x.category === row.category; }) : [];
-  var p = { pos: row.pos, n: n, cat: row.category || '—', catPos: row.category ? 1 + catRows.filter(function (x) { return x.pos < row.pos; }).length : 0, catN: catRows.length, part: 10, bonus: distBonus(R.km), official: true };
-  p.gen = placePts(20, n, p.pos, 10); p.catPts = row.category ? placePts(10, p.catN, p.catPos, 5) : 0;
+  var p = { pos: row.pos, n: n, cat: row.category || '—', catPos: row.category ? 1 + catRows.filter(function (x) { return x.pos < row.pos; }).length : 0, catN: catRows.length, part: PTS.part, bonus: distBonus(R.km), official: true };
+  p.gen = placePts(PTS.gen, n, p.pos, 10); p.catPts = row.category ? placePts(PTS.cat, p.catN, p.catPos, 5) : 0;
   var im = row.secs ? improvement(S.uid, R.km, row.secs / R.km, race.date, null) : { v: 0, why: 'Tempo non presente nella classifica' }; p.imp = im.v; p.impWhy = im.why;
-  p.total = p.part + p.bonus + p.gen + p.catPts + p.imp; return p;
+  p.exact = p.part + p.bonus + p.gen + p.catPts + p.imp; p.total = Math.round(p.exact); return p;
 }
 function offConfirmSheet(rowId) {
   var R = ui.reg, row = S.results[R.raceId].filter(function (x) { return x.id === rowId; })[0]; if (!row) return;
@@ -972,21 +1294,23 @@ function offConfirmSheet(rowId) {
   openSheet(h);
 }
 function regPdf(R) {
-  var race = S.races[R.raceId], P = R.pdf || {};
+  var race = S.races[R.raceId], P = R.pdf || {}, rp = !!P.replace;
   var h = '<div class="card"><b>' + esc(race.name) + '</b><div class="sm">' + esc(dateIt(race.date, true) + ' · ' + race.town) + '</div>' +
-    '<p class="hint" style="margin-top:10px">Carica il PDF con la classifica completa (per esempio da ENDU). La carichi una volta per tutti: poi ognuno si riconosce nella lista.</p>' +
+    (rp ? '<p class="hint" style="margin-top:10px">Carica la versione aggiornata del PDF: sostituisce quella di prima e ricalcola posizioni e punti. Chi si era già riconosciuto viene ricollegato in automatico (per pettorale o nome).</p>'
+      : '<p class="hint" style="margin-top:10px">Carica il PDF con la classifica completa (per esempio da ENDU). La carichi una volta per tutti: poi ognuno si riconosce nella lista.</p>') +
     '<label class="drop"><input type="file" id="pdfFile" accept="application/pdf,.pdf"><b>' + (P.name ? esc(P.name) : 'Scegli il PDF della classifica') + '</b><span class="sm">Viene letto sul tuo telefono</span></label>';
   if (P.status === 'loading') h += '<p class="hint" style="margin-top:10px">Lettura del PDF…</p>';
   if (P.status === 'error') h += '<div class="note">' + esc(P.err) + '</div>';
   if (P.rows) {
     var withCat = P.rows.filter(function (x) { return x.cat; }).length;
-    h += '<div class="okbox">Arrivati letti: <b>' + P.rows.length + '</b> · con categoria ' + withCat + '</div>' +
-      '<label id="lpk">Questa classifica è del percorso da</label><div class="chips" role="group" aria-labelledby="lpk">' + race.distances.map(function (d) { var has = !!officialFor(race, d); return '<button data-act="pdfKm" data-v="' + d + '" aria-pressed="' + (P.km === d) + '" ' + (has ? 'disabled title="già caricata"' : '') + '>' + fmtKm(d) + ' km' + (has ? ' ✓' : '') + '</button>'; }).join('') + '</div>' +
+    var old = rp && P.km ? officialFor(race, P.km) : null;
+    h += '<div class="okbox">Arrivati letti: <b>' + P.rows.length + '</b>' + (old ? ' (prima ' + old.n + ')' : '') + ' · con categoria ' + withCat + '<br>Tempi usati: ' + (P.timeKind === 'real' ? '<b>real time</b>' : P.timeKind === 'mixed' ? '<b>real time</b> (race time dove manca)' : '<b>race time</b>') + '</div>' +
+      '<label id="lpk">Questa classifica è del percorso da</label><div class="chips" role="group" aria-labelledby="lpk">' + race.distances.map(function (d) { var has = !!officialFor(race, d), off = rp ? !has : has; return '<button data-act="pdfKm" data-v="' + d + '" aria-pressed="' + (P.km === d) + '" ' + (off ? 'disabled title="' + (rp ? 'nessuna classifica da aggiornare' : 'già caricata') + '"' : '') + '>' + fmtKm(d) + ' km' + (has ? ' ✓' : '') + '</button>'; }).join('') + '</div>' +
       '<p class="hint" style="margin-top:12px">Controlla le prime righe: devono avere posizione, nome e tempo giusti.</p><div class="list">' +
       P.rows.slice(0, 8).map(function (x) { return '<div class="item"><span class="pos">' + x.pos + '</span><span class="grow"><b>' + esc(x.name) + '</b><small>' + esc([x.bib ? 'pett. ' + x.bib : '', x.cat || '', x.club || ''].filter(Boolean).join(' · ')) + '</small></span><b>' + (x.secs ? fmtTime(x.secs) : '—') + '</b></div>'; }).join('') + '</div>' +
-      '<div class="stack" style="margin-top:14px"><button class="btn" data-act="pdfUpload" ' + (P.km ? '' : 'disabled') + '>Le righe sono giuste: carica la classifica</button></div>';
+      '<div class="stack" style="margin-top:14px"><button class="btn" data-act="' + (rp ? 'pdfReplace' : 'pdfUpload') + '" ' + (P.km ? '' : 'disabled') + '>' + (rp ? 'Le righe sono giuste: aggiorna la classifica' : 'Le righe sono giuste: carica la classifica') + '</button></div>';
   }
-  h += '<div class="stack"><button class="btn link" data-act="regBack" data-v="tempo" style="align-self:center">Indietro</button></div></div>';
+  h += '<div class="stack">' + (rp ? '<a class="btn link" href="#gara-' + esc(race.id) + '" style="align-self:center">Annulla</a>' : '<button class="btn link" data-act="regBack" data-v="tempo" style="align-self:center">Indietro</button>') + '</div></div>';
   return h;
 }
 
@@ -1007,14 +1331,21 @@ var ACT = {
     toast('Squadra creata: sei l’amministratore'); ui.onb = null; await loadAll(); location.hash = '#squadra';
   },
   goJoin: function () { ui.onb = { step: 'squadra', tq: '', code: '', newTeam: '', town: '', color: COLORS[0][0], access: 'open', joining: true }; ui.joinMode = true; location.hash = '#cambia'; },
+  regPickDup: function (el) { closeSheet(); ui.reg.create = false; ui.reg.dupOk = false; var b = document.createElement('button'); b.dataset.v = el.dataset.v; ACT.regPick(b); },
+  regDupNo: function () { closeSheet(); ui.reg.dupOk = true; var b = document.querySelector('[data-act=regCreate]'); if (b) ACT.regCreate(b); },
   regCreateOn: function () { ui.reg.create = true; ui.reg.name = ui.reg.q; render(); },
   regCreateOff: function () { ui.reg.create = false; render(); },
   regCreate: async function (el) {
     var R = ui.reg, name = R.name.trim(), town = R.town.trim(), dists = String(R.dists).split(/[;,\s]+/).map(num).filter(function (x) { return x > 0 && x < 400; });
     if (name.length < 3 || !town || !R.date || !dists.length) { toast('Compila nome, data, comune e distanze'); return; }
-    if (daysSince(R.date) > CLOSE_DAYS || daysSince(R.date) < 0) { toast('Si possono registrare solo gare degli ultimi 7 giorni'); return; }
-    var dup = recentRaces().filter(function (r) { return r.date === R.date && r.town.toLowerCase() === town.toLowerCase(); })[0];
-    if (dup && !R.dupOk) { R.dupOk = true; toast('Esiste già «' + dup.name + '» a ' + dup.town + ' in questa data: se è la stessa, sceglila dall’elenco. Premi di nuovo per crearla comunque.'); return; }
+    if (daysSince(R.date) > CLOSE_DAYS || daysSince(R.date) < 0) { toast('Si possono registrare solo gare degli ultimi 5 giorni'); return; }
+    var sim = similarRaces(name, R.date, town).filter(function (r) { var d = daysSince(r.date); return d >= 0 && d <= CLOSE_DAYS; });
+    if (sim.length && !R.dupOk) {
+      openSheet('<h2>È una di queste?</h2><p class="hint">Qualcuno ha già creato una gara simile. Se è la stessa, sceglila: così finite nella stessa classifica.</p><div class="stack">' +
+        sim.map(function (r) { return '<button class="btn sec" data-act="regPickDup" data-v="' + esc(r.id) + '" style="text-align:left;justify-content:flex-start">' + esc(r.name + ' · ' + dateIt(r.date) + ' · ' + r.town + ' · ' + r.distances.map(fmtKm).join('/') + ' km') + '</button>'; }).join('') +
+        '</div><div class="stack" style="margin-top:12px"><button class="btn link" data-act="regDupNo">No, è un’altra gara: creala</button></div>');
+      return;
+    }
     el.disabled = true; dists = dists.map(function (d) { return Math.round(d * 1000) / 1000; }).sort(function (a, b) { return a - b; });
     var row = await q(sb.from('races').insert({ name: name, date: R.date, town: town, distances: dists, created_by: S.uid }).select('id').single());
     if (!row) { el.disabled = false; return; }
@@ -1063,6 +1394,14 @@ var ACT = {
   regToPdf: function () { ui.reg.step = 'pdf'; ui.reg.pdf = null; render(); },
   pdfFor: function (el) { ui.reg = newReg(); location.hash = '#registra'; setTimeout(function () { ACT.regPick({ dataset: { v: el.dataset.v } }); ui.reg.step = 'pdf'; render(); }, 0); },
   pdfKm: function (el) { ui.reg.pdf.km = num(el.dataset.v); render(); },
+  pdfUpdate: function (el) { var R = ui.reg = newReg(); R.raceId = el.dataset.v; R.step = 'pdf'; R.pdf = { replace: true, km: num(el.dataset.km) }; location.hash = '#registra'; render(); },
+  pdfReplace: async function (el) {
+    var R = ui.reg, P = R.pdf; el.disabled = true; el.textContent = 'Aggiornamento…';
+    var r = await q(sb.rpc('replace_results', { p_race: R.raceId, p_km: P.km, p_rows: P.rows }));
+    if (r === null) { el.disabled = false; el.textContent = 'Le righe sono giuste: aggiorna la classifica'; return; }
+    toast('Classifica aggiornata: ' + r.rows + ' arrivati' + (r.kept ? ', ' + r.kept + ' atleti ricollegati' : '') + (r.lost ? ', ' + r.lost + ' da ricollegare' : ''));
+    var id = R.raceId; await loadAll(); await loadResults(id); ui.reg = newReg(); ui.race.route = P.km; ui.race.routeManual = true; ui.race.raceId = id; location.hash = '#gara-' + id; render();
+  },
   pdfUpload: async function (el) {
     var R = ui.reg, P = R.pdf; el.disabled = true; el.textContent = 'Caricamento…';
     var n = await q(sb.rpc('upload_results', { p_race: R.raceId, p_km: P.km, p_rows: P.rows }));
@@ -1074,12 +1413,18 @@ var ACT = {
   savePriv: async function () { var R = ui.reg, f = (R.first || '').trim(), l = (R.last || '').trim(); if (!f || !l) { toast('Scrivi nome e cognome'); return; }
     if (await q(sb.from('private_profiles').insert({ id: S.uid, first_name: f, last_name: l }))) { S.priv = { first_name: f, last_name: l }; render(); } },
   offPick: function (el) { offConfirmSheet(el.dataset.v); },
+  offRowPick: function (el) { var R = ui.reg = newReg(); R.raceId = ui.race.raceId; R.km = ui.race.route; R.step = 'ufficiale'; R.fromRace = true;
+    var ex = activeEntries().filter(function (e) { return e.raceId === R.raceId && e.uid === S.uid; })[0]; if (ex && ex.bib) R.bib = ex.bib;
+    if (!S.priv) { location.hash = '#registra'; render(); return; } offConfirmSheet(el.dataset.v); },
+  raceOffMore: function () { ui.race.offShow = (ui.race.offShow || 100) + 100; var l = $('raceOffList'); if (l) l.innerHTML = raceOffListHtml(ui.race.raceId, ui.race.route); },
   offClaim: async function (el) { var R = ui.reg; el.disabled = true; var bibIn = $('cb'); if (bibIn) R.bib = bibIn.value;
     var id = await q(sb.rpc('claim_result', { p_result: el.dataset.v, p_bib: String(R.bib || '').trim() || null }));
     if (!id) { el.disabled = false; return; }
-    closeSheet(); await loadAll(); R.savedId = id; R.step = 'fatto'; render(); },
+    closeSheet(); await loadAll(); await loadResults(R.raceId); R.savedId = id;
+    if (R.fromRace && route().view === 'gara') { var pe = S.pts[id] || {}; toast('Fatto! Ti sei preso ' + (pe.total || 0) + ' punti'); render(); return; }
+    R.step = 'fatto'; render(); },
   shotDel: function (el) { var R = ui.reg, x = R.shots.splice(int(el.dataset.v), 1)[0]; if (x && x.url) URL.revokeObjectURL(x.url); render(); },
-  raceRoute: function (el) { ui.race.route = num(el.dataset.v); render(); },
+  raceRoute: function (el) { ui.race.route = num(el.dataset.v); ui.race.routeManual = true; render(); },
   entry: function (el) { ui.reportReason = null; entrySheet(el.dataset.v); },
   report: function (el) { ui.reportReason = null; entrySheet(el.dataset.v, 'report'); },
   repReason: function (el) { ui.reportReason = int(el.dataset.v); entrySheet(el.dataset.e, 'report'); },
@@ -1104,9 +1449,11 @@ var ACT = {
   story: function (el) { story(el.dataset.v); },
   storyTab: function (el) { ui.story.tab = el.dataset.v; storySheet(); },
   teamLogoDel: async function () { var t = S.teams[me().teamId]; if (await q(sb.rpc('set_team_logo', { p_team: t.id, p_path: null }))) { toast('Logo tolto'); loadAll(); } },
-  cls: function (el) { ui.cls[el.dataset.k] = el.dataset.v; if (el.dataset.k === 'sex') ui.cls.cat = 'all'; render(); },
+  cls: function (el) { ui.cls[el.dataset.k] = el.dataset.v; if (el.dataset.k === 'sex') ui.cls.cat = 'all'; if (el.dataset.k === 'season') ui.cls.period = 'season'; render(); },
   teamTab: function (el) { ui.team.tab = el.dataset.v; render(); },
   profChart: function (el) { ui.profile.chart = el.dataset.v; render(); },
+  clsSeason: function (el) { ui.cls.season = el.dataset.v; ui.cls.period = 'season'; ui.cls.kind = 'ind'; location.hash = '#classifiche'; },
+  rbAll: function (el) { ui.profile.rbAll = ui.profile.rbAll === el.dataset.v ? null : el.dataset.v; render(); },
   copyCode: function (el) { try { navigator.clipboard.writeText(el.dataset.v).then(function () { toast('Codice copiato'); }, function () { toast('Copia non riuscita: il codice è ' + el.dataset.v); }); } catch (x) { toast('Il codice è ' + el.dataset.v); } },
   editSex: function (el) { ui.edit.sex = el.dataset.v; render(); },
   editSave: async function () {
@@ -1119,10 +1466,51 @@ var ACT = {
   },
   exportData: function () { var data = { profilo: me(), partecipazioni: activeEntries().filter(function (e) { return e.uid === S.uid; }).map(function (e) { return { gara: S.races[e.raceId].name, data: S.races[e.raceId].date, km: e.km, tempo: fmtTime(e.secs), punti: (S.pts[e.id] || {}).total }; }) };
     try { navigator.clipboard.writeText(JSON.stringify(data, null, 2)).then(function () { toast('Dati copiati negli appunti'); }, function () { toast('Copia non riuscita'); }); } catch (x) { toast('Copia non riuscita'); } },
-  deleteMe: async function (el) {
-    if (el.dataset.confirm !== '1') { el.dataset.confirm = '1'; el.textContent = 'Tocca di nuovo per cancellare tutto'; return; }
-    await q(sb.from('entries').delete().eq('user_id', S.uid), true); await q(sb.from('profiles').delete().eq('id', S.uid), true);
-    ui.onb = null; toast('Profilo cancellato'); await sb.auth.signOut(); location.hash = '';
+  deleteMe: function () {
+    ui.delTxt = '';
+    openSheet('<h2>Eliminare l’account?</h2><p class="hint">Cancelliamo per sempre profilo, nome e cognome, email, tutte le tue gare e i loro punti, voti, foto e screenshot. Le tue gare spariscono dalle classifiche, anche da quelle della squadra. Le gare che hai creato e le classifiche ufficiali che hai caricato restano per gli altri, senza il tuo nome. Non si può annullare.</p>' +
+      '<label for="delc">Per confermare scrivi <b>ELIMINA</b></label><input id="delc" type="text" autocapitalize="characters" autocomplete="off" data-bind="delbox.t">' +
+      '<div class="stack" style="margin-top:12px"><button class="btn danger" data-act="deleteMeGo" style="border:2px solid var(--bad)">Elimina definitivamente</button><button class="btn link" data-act="closeSheet">Annulla</button></div>');
+    ui.delbox = { t: '' };
+  },
+  deleteMeGo: async function (el) {
+    if (((ui.delbox || {}).t || '').trim().toUpperCase() !== 'ELIMINA') { toast('Scrivi ELIMINA per confermare'); return; }
+    el.disabled = true; el.textContent = 'Eliminazione…';
+    try { // foto e screenshot nella mia cartella
+      for (var round = 0; round < 20; round++) {
+        var ls = await sb.storage.from('screenshots').list(S.uid, { limit: 100 }); var files = (ls.data || []).filter(function (f) { return f.name && f.id !== null; });
+        if (!files.length) break; await sb.storage.from('screenshots').remove(files.map(function (f) { return S.uid + '/' + f.name; }));
+      }
+    } catch (x) { console.warn(x); }
+    var r = await q(sb.rpc('delete_my_account'));
+    if (r === null) { el.disabled = false; el.textContent = 'Elimina definitivamente'; return; }
+    closeSheet(); ui.onb = null; ui.reg = null; await sb.auth.signOut(); location.hash = ''; toast('Account eliminato. Grazie di aver corso con noi.');
+  },
+  acceptTerms: async function (el) { el.disabled = true; var r = await q(sb.rpc('accept_terms')); if (r === null) { el.disabled = false; return; } me().termsAt = new Date().toISOString(); toast('Grazie! Buone corse.'); render(); },
+  showLegal: function () { openSheet('<div>' + legalHtml() + '</div><div class="stack" style="margin-top:10px"><button class="btn" data-act="closeSheet">Chiudi</button></div>'); },
+  closeSheetGo: function (el) { closeSheet(); location.hash = el.getAttribute('href'); },
+  admArchive: async function (el) { el.disabled = true; el.textContent = 'Archiviazione…'; var r = await archiveSeason(int(el.dataset.v)); if (r === null) { el.disabled = false; el.textContent = 'Archivia la stagione ' + el.dataset.v; } else render(); },
+  admRace: function (el) { admRaceSheet(el.dataset.v, el.dataset.into || null); },
+  admMerge: async function (el) {
+    var f = S.races[el.dataset.v], t = S.races[el.dataset.into];
+    if (el.dataset.confirm !== '1') { el.dataset.confirm = '1'; el.textContent = 'Confermi? «' + f.name + '» entra in «' + t.name + '»'; return; }
+    el.disabled = true; var r = await q(sb.rpc('admin_merge_races', { p_from: f.id, p_into: t.id })); if (r === null) { el.disabled = false; return; }
+    closeSheet(); toast('Gare unite: ' + r.moved + ' partecipazioni spostate' + (r.dup ? ', ' + r.dup + ' doppie tolte' : '')); await loadAll(); render();
+  },
+  admSave: async function (el) {
+    var A = ui.admin; el.disabled = true;
+    var r = await q(sb.rpc('admin_update_race', { p_race: el.dataset.v, p_name: (A.ename || '').trim(), p_date: A.edate, p_town: (A.etown || '').trim() }));
+    el.disabled = false; if (r === null) return; closeSheet(); toast('Gara aggiornata'); await loadAll(); render();
+  },
+  admDelete: async function (el) {
+    var r0 = S.races[el.dataset.v], n = activeEntries().filter(function (e) { return e.raceId === r0.id; }).length;
+    if (el.dataset.confirm !== '1') { el.dataset.confirm = '1'; el.textContent = n ? 'Tocca di nuovo: cancella anche ' + n + (n === 1 ? ' partecipazione' : ' partecipazioni') : 'Tocca di nuovo per eliminarla'; return; }
+    el.disabled = true; var r = await q(sb.rpc('admin_delete_race', { p_race: r0.id })); if (r === null) { el.disabled = false; return; }
+    closeSheet(); toast('Gara eliminata'); await loadAll(); render();
+  },
+  admSet: async function (el) {
+    var on = el.dataset.on === '1'; el.disabled = true; var r = await q(sb.rpc('admin_set', { p_user: el.dataset.v, p_on: on })); el.disabled = false; if (r === null) return;
+    toast(on ? memberName(el.dataset.v) + ' ora è amministratore' : memberName(el.dataset.v) + ' non è più amministratore'); await loadAll(); render();
   },
   logout: async function () { await sb.auth.signOut(); ui.auth = null; ui.onb = null; ui.reg = null; location.hash = ''; },
   copyInvite: function (el) {
@@ -1134,6 +1522,8 @@ var ACT = {
     var a = ui.auth, email = (a.email || '').trim(); if (!/^\S+@\S+\.\S+$/.test(email)) { toast('Scrivi un indirizzo email valido'); return; }
     var r;
     if (a.mode !== 'reset' && (a.pass || '').length < 8) { toast('La password deve avere almeno 8 caratteri'); return; }
+    if (a.mode === 'signup' && !a.terms) { toast('Per creare l’account devi accettare privacy e condizioni d’uso'); return; }
+    if (a.mode === 'signup') { try { localStorage.setItem('finishr_terms', '1'); } catch (x) {} }
     el.disabled = true;
     if (a.mode === 'reset') { r = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname }); if (!r.error) { a.mode = 'sent'; a.msg = 'Se l’indirizzo è registrato, ti abbiamo mandato un link per scegliere una nuova password.'; } }
     else if (a.mode === 'signup') { r = await sb.auth.signUp({ email: email, password: a.pass, options: { emailRedirectTo: location.origin + location.pathname } }); if (!r.error && !r.data.session) { a.mode = 'sent'; a.msg = 'Ti abbiamo mandato un’email: apri il link per confermare l’indirizzo, poi torna qui e accedi.'; } }
@@ -1150,7 +1540,9 @@ var ACT = {
 async function ensureProfile() {
   if (me()) return true; var o = ui.onb;
   var ok = await q(sb.from('profiles').insert({ id: S.uid, nick: o.nick.trim(), sex: o.sex, birth: int(o.birth) }));
-  if (ok) { S.members[sid(S.uid)] = { uid: S.uid, nick: o.nick.trim(), sex: o.sex, birth: int(o.birth), teamId: null, teamChanges: {} };
+  if (ok) { var tOk = false; try { tOk = localStorage.getItem('finishr_terms') === '1'; } catch (x) {}
+    if (tOk && (await q(sb.rpc('accept_terms'), true)) !== null) { try { localStorage.removeItem('finishr_terms'); } catch (x) {} } else tOk = false;
+    S.members[sid(S.uid)] = { uid: S.uid, nick: o.nick.trim(), sex: o.sex, birth: int(o.birth), teamId: null, teamChanges: {}, termsAt: tOk ? new Date().toISOString() : null };
     if ((o.first || '').trim() && (o.last || '').trim()) { await q(sb.from('private_profiles').insert({ id: S.uid, first_name: o.first.trim(), last_name: o.last.trim() }), true); S.priv = { first_name: o.first.trim(), last_name: o.last.trim() }; } }
   return !!ok;
 }
@@ -1185,6 +1577,8 @@ function liveUpdate(b) {
   if (b === 'reg.q') { var q = ui.reg.q.trim().toLowerCase(); $('raceList').innerHTML = raceListHtml(recentRaces().filter(function (r) { return !q || r.name.toLowerCase().indexOf(q) !== -1 || r.town.toLowerCase().indexOf(q) !== -1; }).sort(function (a, b) { return a.date < b.date ? 1 : -1; }), q); }
   else if (b === 'reg.h' || b === 'reg.m' || b === 'reg.s') { var R = ui.reg, s = regSecs(R); $('paceOut').textContent = R.km && s ? fmtPace(s / R.km) : '—'; $('toProva').disabled = !(R.km && s); }
   else if (b === 'onb.birth') { var o = ui.onb, age = new Date().getFullYear() - int(o.birth); $('catPrev').innerHTML = int(o.birth) && age < 18 ? 'L’app è riservata ai maggiorenni.' : 'Categoria FIDAL: <b>' + esc(catLabel(category(o.sex, int(o.birth), new Date().getFullYear()))) + '</b>'; onbValid(); }
+  else if (b === 'admin.q') { var al = $('admList'); if (al) al.innerHTML = admListHtml(); }
+  else if (b === 'race.offQ') { ui.race.offShow = 100; var rl = $('raceOffList'); if (rl) rl.innerHTML = raceOffListHtml(ui.race.raceId, ui.race.route); }
   else if (b === 'reg.offQ' || (b === 'reg.bib' && ui.reg && ui.reg.step === 'ufficiale')) {
     var R2 = ui.reg, rows2 = ((S.results || {})[R2.raceId] || []).filter(function (x) { return x.km === R2.km; }), nq2 = normName(R2.offQ != null ? R2.offQ : ''), sur2 = normName((S.priv || {}).last_name), bib2 = String(R2.bib || '').replace(/^0+/, '');
     var l2 = rows2.filter(function (x) { return !nq2 || normName(x.name).indexOf(nq2) !== -1 || (x.bib && x.bib.replace(/^0+/, '') === nq2); }).map(function (x) { x._score = (bib2 && x.bib && x.bib.replace(/^0+/, '') === bib2 ? 2 : 0) + ((' ' + normName(x.name) + ' ').indexOf(' ' + sur2 + ' ') !== -1 ? 1 : 0); return x; }).sort(function (a, b) { return b._score - a._score || a.pos - b.pos; }).slice(0, 40);
@@ -1196,6 +1590,8 @@ function onbValid() { var o = ui.onb, b = $('onbNext'); if (b) b.disabled = !(o.
 document.addEventListener('keyup', function (ev) { if (ev.target.dataset && /^onb\.(nick|first|last)$/.test(ev.target.dataset.bind || '')) onbValid(); });
 document.addEventListener('change', function (ev) {
   var el = ev.target;
+  if (el.id === 'aterms') { ui.auth.terms = el.checked; return; }
+  if (el.id === 'gterms') { ui.gateTerms = el.checked; var gb = $('gtermsBtn'); if (gb) gb.disabled = !el.checked; return; }
   if (el.id === 'gpxFile' && el.files[0]) { var f = el.files[0], r = new FileReader(); r.onload = function () { try { ui.reg.gpx = parseGpx(r.result); } catch (e) { ui.reg.gpx = { error: e.message }; } if (ui.reg.gpx.error) ui.reg.gpx = null, toast('File non leggibile: non è un GPX valido'); render(); }; r.readAsText(f); }
   if (el.id === 'photoFile' && el.files[0]) {
     (async function (file) {
@@ -1224,10 +1620,12 @@ document.addEventListener('change', function (ev) {
     })(el.files[0]);
   }
   if (el.id === 'pdfFile' && el.files[0]) {
-    var pf = el.files[0], RR = ui.reg; RR.pdf = { name: pf.name, status: 'loading' }; render();
+    var pf = el.files[0], RR = ui.reg, keep = RR.pdf && RR.pdf.replace ? { replace: true, km: RR.pdf.km } : {}; RR.pdf = { name: pf.name, status: 'loading', replace: keep.replace, km: keep.km }; render();
     pdfLines(pf).then(function (lines) { var rows = parseResultLines(lines, int(S.races[RR.raceId].date.slice(0, 4))); if (rows.length < 2) throw new Error('Non ho trovato righe di classifica in questo PDF.');
-      RR.pdf = { name: pf.name, rows: rows, km: RR.km && !officialFor(S.races[RR.raceId], RR.km) ? RR.km : (S.races[RR.raceId].distances.length === 1 ? S.races[RR.raceId].distances[0] : null) }; render(); })
-      .catch(function (err) { RR.pdf = { name: pf.name, status: 'error', err: (err && err.message && /righe/.test(err.message)) ? err.message : 'Non riesco a leggere questo PDF. Se è una scansione (immagine) non contiene testo leggibile.' }; render(); });
+      var wasRp = RR.pdf && RR.pdf.replace, rpKm = RR.pdf && RR.pdf.km;
+      RR.pdf = wasRp ? { name: pf.name, rows: rows, timeKind: rows.timeKind, replace: true, km: rpKm }
+        : { name: pf.name, rows: rows, timeKind: rows.timeKind, km: RR.km && !officialFor(S.races[RR.raceId], RR.km) ? RR.km : (S.races[RR.raceId].distances.length === 1 ? S.races[RR.raceId].distances[0] : null) }; render(); })
+      .catch(function (err) { RR.pdf = { name: pf.name, replace: keep.replace, km: keep.km, status: 'error', err: (err && err.message && /righe/.test(err.message)) ? err.message : 'Non riesco a leggere questo PDF. Se è una scansione (immagine) non contiene testo leggibile.' }; render(); });
   }
   if (el.id === 'shotFile' && el.files.length) {
     var R = ui.reg, files = [].slice.call(el.files, 0, 4 - R.shots.length);
